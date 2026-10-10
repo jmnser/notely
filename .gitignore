@@ -1,5 +1,6 @@
-/gnotes
-/web/app.wasm
-/notes.json
+/bin/
+/dist/
+/cmd/gnotes-web/web/app.wasm
+notes.json*
 /.claude/worktrees/
 .claude-worktree.md

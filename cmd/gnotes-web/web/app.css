@@ -1,0 +1,116 @@
+:root {
+  color-scheme: light dark;
+  font-family: system-ui, sans-serif;
+}
+body {
+  margin: 0;
+}
+[hidden] {
+  display: none !important;
+}
+.app {
+  display: grid;
+  grid-template: auto minmax(0, 1fr) / 18rem minmax(0, 1fr);
+  height: 100dvh;
+}
+.banner {
+  grid-column: 1 / -1;
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  padding: 0.5rem 0.75rem;
+  background: Mark;
+  color: MarkText;
+}
+aside,
+main {
+  grid-row: 2;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+aside {
+  border-right: 1px solid color-mix(in srgb, currentColor 20%, transparent);
+}
+header {
+  display: flex;
+  gap: 0.5rem;
+  padding: 0.5rem;
+}
+header input {
+  flex: 1;
+  min-width: 0;
+}
+main header {
+  justify-content: flex-end;
+}
+ul {
+  flex: 1;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  list-style: none;
+}
+.note {
+  display: block;
+  width: 100%;
+  padding: 0.6rem 0.75rem;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.note.current {
+  background: SelectedItem;
+  color: SelectedItemText;
+}
+.note b {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.note.pinned b::before {
+  content: "📌 ";
+}
+.note small {
+  opacity: 0.7;
+}
+#title,
+#body {
+  padding: 0.5rem 1rem;
+  border: 0;
+  outline: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+}
+#title {
+  font-size: 1.5rem;
+  font-weight: 600;
+}
+#body {
+  flex: 1;
+  resize: none;
+}
+.back {
+  display: none;
+  margin-right: auto;
+}
+.app:not(.editing) main {
+  visibility: hidden;
+}
+@media (max-width: 40rem) {
+  .app {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .app.editing aside,
+  .app:not(.editing) main {
+    display: none;
+  }
+  .back {
+    display: block;
+  }
+}

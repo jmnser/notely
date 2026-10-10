@@ -1,11 +1,14 @@
-.PHONY: build run lint
+.PHONY: build run test lint
 
 build:
-	GOOS=js GOARCH=wasm go build -o web/app.wasm
-	go build -o gnotes
+	GOOS=js GOARCH=wasm go build -ldflags "-s -w" -o cmd/gnotes-web/web/app.wasm ./cmd/gnotes-web
+	go build -o bin/ ./cmd/...
 
 run: build
-	./gnotes
+	./bin/gnotes-api & ./bin/gnotes-web; kill $$!
+
+test:
+	go test -race ./...
 
 lint:
 	golangci-lint run
