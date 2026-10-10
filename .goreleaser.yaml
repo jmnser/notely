@@ -1,0 +1,17 @@
+version: 2
+
+before:
+  hooks:
+    - env GOOS=js GOARCH=wasm go build -ldflags "-s -w" -o cmd/gnotes-web/web/app.wasm ./cmd/gnotes-web
+
+builds:
+  - &build
+    id: gnotes-api
+    main: ./cmd/gnotes-api
+    binary: gnotes-api
+    env: [CGO_ENABLED=0]
+    goarch: [amd64, arm64]
+  - <<: *build
+    id: gnotes-web
+    main: ./cmd/gnotes-web
+    binary: gnotes-web
