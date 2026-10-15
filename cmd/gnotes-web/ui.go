@@ -131,10 +131,13 @@ func (u *ui) Render() app.UI {
 	// fields, whose values live in the DOM only.
 	return app.Div().Class(class).Body(
 		app.Nav().Class("drawer").Body(
-			app.Button().Class("fab").Body(icon("new_folder"), app.Span().Text("New space")).OnClick(u.createSpace),
-			app.Label().Class("search").Body(
-				icon("search"),
-				app.Input().Type("search").Placeholder("Search notes").Aria("label", "Search notes").OnInput(u.ValueTo(&u.query)),
+			app.Div().Class("drawer-top").Body(
+				app.Label().Class("search").Body(
+					icon("search"),
+					app.Input().Type("search").Placeholder("Search notes").Aria("label", "Search notes").
+						OnInput(u.ValueTo(&u.query)),
+				),
+				iconButton("add", "New space").Class("icon-button tonal").OnClick(u.createSpace),
 			),
 			app.Ul().Class("tree").Body(app.Range(names).Slice(func(i int) app.UI {
 				s := names[i]

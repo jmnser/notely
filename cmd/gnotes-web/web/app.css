@@ -90,7 +90,6 @@ button {
 .icon-button,
 .space-name,
 .note,
-.fab,
 .segmented button,
 .text-button {
   position: relative;
@@ -99,7 +98,6 @@ button {
 .icon-button::after,
 .space-name::after,
 .note::after,
-.fab::after,
 .segmented button::after,
 .text-button::after {
   content: "";
@@ -111,10 +109,10 @@ button {
   transition: opacity 150ms;
   pointer-events: none;
 }
-:is(.icon-button, .space-name, .note, .fab, .segmented button, .text-button):hover::after {
+:is(.icon-button, .space-name, .note, .segmented button, .text-button):hover::after {
   opacity: 0.08;
 }
-:is(.icon-button, .space-name, .note, .fab, .segmented button, .text-button):active::after {
+:is(.icon-button, .space-name, .note, .segmented button, .text-button):active::after {
   opacity: 0.12;
 }
 
@@ -133,24 +131,21 @@ button {
   min-height: 0;
   padding: 12px;
 }
-.fab {
+.drawer-top {
   display: flex;
   align-items: center;
-  gap: 12px;
-  align-self: flex-start;
+  gap: 8px;
+}
+.icon-button.tonal {
+  width: 56px;
   height: 56px;
-  padding: 0 20px 0 16px;
-  border: 0;
-  border-radius: 16px;
   background: var(--md-primary-container);
   color: var(--md-on-primary-container);
-  box-shadow: var(--md-elevation-3);
-  font-size: 14px;
-  font-weight: 500;
-  letter-spacing: 0.1px;
 }
 .search {
   display: flex;
+  flex: 1;
+  min-width: 0;
   align-items: center;
   gap: 12px;
   height: 56px;
@@ -643,12 +638,6 @@ dialog p {
   .segmented button {
     padding: 0 12px;
   }
-  .fab {
-    position: fixed;
-    right: 16px;
-    bottom: 16px;
-    z-index: 5;
-  }
   #title {
     padding: 8px 16px;
     font-size: 28px;
@@ -660,11 +649,5 @@ dialog p {
   #body {
     width: calc(100% - 16px);
     margin: 8px;
-  }
-  .tree {
-    padding-bottom: 88px;
-  }
-  .snackbar {
-    bottom: 88px;
   }
 }

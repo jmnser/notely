@@ -55,7 +55,7 @@ Task list checkboxes can be checked in view mode. Each rendered checkbox carries
 - Create, edit (autosave), pin, delete and full-text search notes
 - Works offline: installable PWA, cached app shell, local copy of all notes, changes sync when the backend is reachable again
 - Picks up changes made on other devices
-- Material Design 3 look: navigation drawer, search bar, FAB, top app bar, segmented View/Edit button, dialogs, snackbar; M3 baseline colors in light and dark
+- Material Design 3 look: navigation drawer, search bar, plus button next to search, top app bar, segmented View/Edit button, dialogs, snackbar; M3 baseline colors in light and dark
 - Responsive layout (single pane up to 600px), app icons for installation
 - Cross-origin write protection on both servers
 - Self-contained binaries; releases via svu and GoReleaser
