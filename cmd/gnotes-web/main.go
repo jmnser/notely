@@ -43,10 +43,19 @@ func main() {
 	}})
 	mux.Handle("/web/", http.FileServerFS(web))
 	mux.Handle("/", &app.Handler{
-		Name:        "gnotes",
-		Description: "A note taking app",
-		Styles:      []string{"/web/app.css"},
-		Version:     version,
+		Name:            "gnotes",
+		Title:           "gnotes",
+		Description:     "Offline-first Markdown notes",
+		ThemeColor:      "#f3edf7",
+		BackgroundColor: "#f3edf7",
+		Icon: app.Icon{
+			Default:  "/web/icon-192.png",
+			Large:    "/web/icon-512.png",
+			Maskable: "/web/icon-512.png",
+			SVG:      "/web/icon.svg",
+		},
+		Styles:  []string{"/web/app.css"},
+		Version: version,
 	})
 	if err := serve.Run(*addr, http.NewCrossOriginProtection().Handler(mux)); err != nil {
 		log.Fatal(err)

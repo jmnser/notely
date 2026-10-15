@@ -27,6 +27,16 @@ type cache struct {
 	Deleted []string
 }
 
+// prompt describes the dialog.
+type prompt struct {
+	title  string
+	text   string
+	ok     string
+	input  bool // asks for a space name, passed to run
+	danger bool
+	run    func(string)
+}
+
 // ui is the whole app: spaces with their notes and a viewer/editor. Changes
 // are applied locally first and then synced to the backend.
 type ui struct {
@@ -40,7 +50,8 @@ type ui struct {
 	current   string          // ID of the open note
 	editing   bool            // the open note shows its Markdown source
 	collapsed map[string]bool // spaces whose notes are hidden
-	html      string          // rendered htmlSrc
+	dialog    prompt
+	html      string // rendered htmlSrc
 	htmlSrc   string
 	query     string
 	status    string
@@ -90,57 +101,79 @@ func (u *ui) Render() app.UI {
 		}
 	}
 	names := slices.Sorted(maps.Keys(spaces))
+	known := map[string]bool{}
+	for _, n := range u.notes {
+		known[spaceName(n.Space)] = true
+	}
+	all := slices.Sorted(maps.Keys(known)) // offered in the dialog
 
 	cur := u.find(u.current)
-	class, pin, mode, space, body := "app", "Pin", "Edit", "", ""
+	class, pin, space, body := "app", "icon-button", "", ""
 	if cur != nil {
 		class += " open"
 		if cur.Pinned {
-			pin = "Unpin"
+			pin += " selected"
 		}
 		space, body = cur.Space, cur.Body
 	}
+	view, edit := "", ""
 	if u.editing {
-		mode = "View"
+		edit = "selected"
+	} else {
+		view = "selected"
+	}
+	danger := "text-button"
+	if u.dialog.danger {
+		danger += " danger"
 	}
 
 	// The tree keeps its shape so that go-app never replaces the editor
 	// fields, whose values live in the DOM only.
 	return app.Div().Class(class).Body(
-		app.Div().Class("banner").Hidden(u.status == "" && !u.update).Body(
-			app.Span().Text(u.status),
-			app.Button().Text("Update app").Hidden(!u.update).OnClick(func(ctx app.Context, _ app.Event) {
-				ctx.Reload()
-			}),
-		),
-		app.Aside().Body(
-			app.Header().Body(
-				app.Input().Type("search").Placeholder("Search").OnInput(u.ValueTo(&u.query)),
-				app.Button().Text("New space").OnClick(u.createSpace),
+		app.Nav().Class("drawer").Body(
+			app.H1().Class("brand").Body(icon("description"), app.Span().Text("gnotes")),
+			app.Button().Class("fab").Body(icon("new_folder"), app.Span().Text("New space")).OnClick(u.createSpace),
+			app.Label().Class("search").Body(
+				icon("search"),
+				app.Input().Type("search").Placeholder("Search notes").Aria("label", "Search notes").OnInput(u.ValueTo(&u.query)),
 			),
-			app.Ul().Body(app.Range(names).Slice(func(i int) app.UI {
+			app.Ul().Class("tree").Body(app.Range(names).Slice(func(i int) app.UI {
 				s := names[i]
 				return u.renderSpace(s, spaces[s], query != "" || !u.collapsed[s])
 			})),
 		),
 		app.Main().Body(
-			app.Header().Body(
-				app.Button().Class("back").Text("Back").OnClick(func(app.Context, app.Event) { u.open("") }),
-				app.Span().Class("path").Text(spaceName(space)+" /"),
-				app.Button().Text(mode).OnClick(func(ctx app.Context, _ app.Event) { u.setEditing(ctx, !u.editing) }),
-				app.Button().Text("Move").OnClick(u.move),
-				app.Button().Text(pin).OnClick(func(app.Context, app.Event) {
-					u.edit(func(n *note.Note) { n.Pinned = !n.Pinned })
-				}),
-				app.Button().Text("Delete").OnClick(u.remove),
+			app.Div().Class("empty").Body(
+				icon("description"),
+				app.P().Text("Select a note, or create a space to start writing."),
 			),
-			app.Input().ID("title").Placeholder("Title").MaxLength(200).OnInput(func(ctx app.Context, _ app.Event) {
-				v := ctx.JSSrc().Get("value").String()
-				u.edit(func(n *note.Note) { n.Title = v })
-			}),
+			app.Header().Class("top-bar").Body(
+				iconButton("arrow_back", "Back").Class("icon-button back").OnClick(func(app.Context, app.Event) { u.open("") }),
+				app.Span().Class("path").Body(icon("folder"), app.Span().Text(spaceName(space))),
+				app.Div().Class("segmented").Body(
+					app.Button().Class(view).Title("View").Aria("pressed", !u.editing).
+						Body(icon("visibility"), app.Span().Text("View")).
+						OnClick(func(ctx app.Context, _ app.Event) { u.setEditing(ctx, false) }),
+					app.Button().Class(edit).Title("Edit").Aria("pressed", u.editing).
+						Body(icon("edit"), app.Span().Text("Edit")).
+						OnClick(func(ctx app.Context, _ app.Event) { u.setEditing(ctx, true) }),
+				),
+				iconButton("move", "Move to space").OnClick(u.move),
+				iconButton("push_pin", "Pin").Class(pin).Aria("pressed", cur != nil && cur.Pinned).
+					OnClick(func(app.Context, app.Event) {
+						u.edit(func(n *note.Note) { n.Pinned = !n.Pinned })
+					}),
+				iconButton("delete", "Delete").OnClick(u.remove),
+			),
+			app.Input().ID("title").Placeholder("Untitled").MaxLength(200).Aria("label", "Title").
+				OnInput(func(ctx app.Context, _ app.Event) {
+					v := ctx.JSSrc().Get("value").String()
+					u.edit(func(n *note.Note) { n.Title = v })
+				}),
 			app.Div().ID("view").Title("Double-click to edit").Hidden(u.editing).
 				OnClick(u.check).OnDblClick(u.startEdit).Body(app.Raw(u.rendered(body))),
-			app.Textarea().ID("body").Placeholder("Markdown").MaxLength(100000).Hidden(!u.editing).
+			app.Textarea().ID("body").Placeholder("Write Markdown…").MaxLength(100000).Aria("label", "Note").
+				Hidden(!u.editing).
 				OnInput(func(ctx app.Context, _ app.Event) {
 					v := ctx.JSSrc().Get("value").String()
 					u.edit(func(n *note.Note) { n.Body = v })
@@ -154,6 +187,29 @@ func (u *ui) Render() app.UI {
 					}
 				}),
 		),
+		app.Div().Class("snackbar").Hidden(u.status == "" && !u.update).Body(
+			app.Span().Text(u.status),
+			app.Button().Class("text-button").Text("Update").Hidden(!u.update).OnClick(func(ctx app.Context, _ app.Event) {
+				ctx.Reload()
+			}),
+		),
+		app.Dialog().ID("dialog").Body(
+			app.Form().OnSubmit(u.submit).Body(
+				app.H2().Text(u.dialog.title),
+				app.P().Text(u.dialog.text).Hidden(u.dialog.text == ""),
+				app.Input().ID("dialog-input").Class("field").Aria("label", u.dialog.title).
+					Attr("list", "spaces").MaxLength(100).Hidden(!u.dialog.input),
+				app.DataList().ID("spaces").Body(app.Range(all).Slice(func(i int) app.UI {
+					return app.Option().Value(all[i])
+				})),
+				app.Div().Class("actions").Body(
+					app.Button().Type("button").Class("text-button").Text("Cancel").OnClick(func(app.Context, app.Event) {
+						app.Window().GetElementByID("dialog").Call("close")
+					}),
+					app.Button().Type("submit").Class(danger).Text(u.dialog.ok),
+				),
+			),
+		),
 	)
 }
 
@@ -165,13 +221,17 @@ func (u *ui) renderSpace(s string, notes []note.Note, open bool) app.UI {
 	}
 	return app.Li().Body(
 		app.Div().Class(class).Body(
-			app.Button().Class("name").Text(spaceName(s)).OnClick(func(app.Context, app.Event) {
+			app.Button().Class("space-name").Aria("expanded", open).Body(
+				app.Span().Class("chevron").Body(icon("expand_more")),
+				app.Span().Class("label").Text(spaceName(s)),
+				app.Span().Class("count").Text(len(notes)),
+			).OnClick(func(app.Context, app.Event) {
 				u.collapsed[s] = !u.collapsed[s]
 			}, app.EventScope(s)),
-			app.Button().Title("New note").Text("+").OnClick(func(ctx app.Context, _ app.Event) {
-				u.create(ctx, s)
+			iconButton("add", "New note").OnClick(func(app.Context, app.Event) {
+				u.create(s)
 			}, app.EventScope(s)),
-			app.Button().Title("Rename space").Text("✎").OnClick(func(app.Context, app.Event) {
+			iconButton("edit", "Rename space").OnClick(func(app.Context, app.Event) {
 				u.renameSpace(s)
 			}, app.EventScope(s)),
 		),
@@ -186,8 +246,11 @@ func (u *ui) renderSpace(s string, notes []note.Note, open bool) app.UI {
 					class += " pinned"
 				}
 				return app.Li().Body(app.Button().Class(class).Body(
-					app.B().Text(label(n)),
-					app.Small().Text(n.Updated.Local().Format("Jan 2 15:04")),
+					app.Span().Class("note-text").Body(
+						app.Span().Class("note-title").Text(label(n)),
+						app.Span().Class("note-meta").Text(n.Updated.Local().Format("Jan 2, 15:04")),
+					),
+					app.Span().Class("pin").Body(icon("push_pin")),
 				).OnClick(func(app.Context, app.Event) { u.open(n.ID) }, app.EventScope(n.ID)))
 			}))
 		}),
@@ -213,17 +276,36 @@ func spaceName(s string) string {
 	return s
 }
 
-// askSpace prompts for a space name; ok is false if the prompt was cancelled.
-func askSpace(msg, s string) (space string, ok bool) {
-	v := app.Window().Call("prompt", msg, spaceName(s))
-	if v.IsNull() || v.IsUndefined() {
-		return "", false
+// spaceOf is the space for name entered by the user.
+func spaceOf(name string) string {
+	if name == defaultSpace {
+		return ""
 	}
-	space = strings.TrimSpace(v.String())
-	if space == defaultSpace {
-		space = ""
+	return name
+}
+
+// ask opens the dialog; value prefills its text field.
+func (u *ui) ask(p prompt, value string) {
+	u.dialog = p
+	in := app.Window().GetElementByID("dialog-input")
+	in.Set("value", value)
+	u.ctx.Defer(func(app.Context) {
+		app.Window().GetElementByID("dialog").Call("showModal")
+		if p.input {
+			in.Call("select")
+		}
+	})
+}
+
+func (u *ui) submit(_ app.Context, e app.Event) {
+	e.PreventDefault()
+	v := strings.TrimSpace(app.Window().GetElementByID("dialog-input").Get("value").String())
+	app.Window().GetElementByID("dialog").Call("close")
+	run := u.dialog.run
+	u.dialog.run = nil
+	if run != nil {
+		run(v)
 	}
-	return space, true
 }
 
 // rendered returns src as HTML, rendering it only when it changed.
@@ -323,41 +405,49 @@ func (u *ui) check(_ app.Context, e app.Event) {
 	app.Window().GetElementByID("body").Set("value", body)
 }
 
-func (u *ui) create(ctx app.Context, space string) {
+// create adds a note to space and opens it in edit mode.
+func (u *ui) create(space string) {
 	n := note.Note{ID: rand.Text(), Space: space, Updated: time.Now()}
 	u.notes = append(u.notes, n)
 	delete(u.collapsed, space)
 	u.changed(n.ID)
 	u.open(n.ID)
 	u.editing = true
-	ctx.Defer(func(app.Context) { app.Window().GetElementByID("title").Call("focus") })
+	u.ctx.Defer(func(app.Context) { app.Window().GetElementByID("title").Call("focus") })
 }
 
 // createSpace creates a space with a first note in it. A space exists as long
 // as it has notes.
-func (u *ui) createSpace(ctx app.Context, _ app.Event) {
-	if s, ok := askSpace("Name of the new space", "New space"); ok && s != "" {
-		u.create(ctx, s)
-	}
+func (u *ui) createSpace(app.Context, app.Event) {
+	u.ask(prompt{
+		title: "New space", text: "A space holds notes, like a folder.", ok: "Create", input: true,
+		run: func(name string) {
+			if name != "" {
+				u.create(spaceOf(name))
+			}
+		},
+	}, "")
 }
 
 // renameSpace moves all notes of space s to another space.
 func (u *ui) renameSpace(s string) {
-	name, ok := askSpace("Rename space", s)
-	if !ok || name == s {
-		return
-	}
-	var ids []string
-	for _, n := range u.notes {
-		if n.Space == s {
-			ids = append(ids, n.ID)
+	u.ask(prompt{title: "Rename space", ok: "Rename", input: true, run: func(name string) {
+		name = spaceOf(name)
+		if name == s {
+			return
 		}
-	}
-	for _, id := range ids {
-		u.find(id).Space = name
-		u.changed(id)
-	}
-	delete(u.collapsed, name)
+		var ids []string
+		for _, n := range u.notes {
+			if n.Space == s {
+				ids = append(ids, n.ID)
+			}
+		}
+		for _, id := range ids {
+			u.find(id).Space = name
+			u.changed(id)
+		}
+		delete(u.collapsed, name)
+	}}, spaceName(s))
 }
 
 // move moves the open note to another space.
@@ -366,10 +456,14 @@ func (u *ui) move(app.Context, app.Event) {
 	if cur == nil {
 		return
 	}
-	if s, ok := askSpace("Move to space", cur.Space); ok {
-		u.edit(func(n *note.Note) { n.Space = s })
-		delete(u.collapsed, s)
-	}
+	u.ask(prompt{
+		title: "Move to space", text: "Pick a space or type a new name.", ok: "Move", input: true,
+		run: func(name string) {
+			s := spaceOf(name)
+			u.edit(func(n *note.Note) { n.Space = s })
+			delete(u.collapsed, s)
+		},
+	}, spaceName(cur.Space))
 }
 
 // edit applies f to the open note.
@@ -382,15 +476,21 @@ func (u *ui) edit(f func(*note.Note)) {
 }
 
 func (u *ui) remove(app.Context, app.Event) {
-	if !app.Window().Call("confirm", "Delete this note?").Bool() {
+	cur := u.find(u.current)
+	if cur == nil {
 		return
 	}
-	id := u.current
-	u.notes = slices.DeleteFunc(u.notes, func(n note.Note) bool { return n.ID == id })
-	u.deleted = append(u.deleted, id)
-	u.changed(id)
-	delete(u.dirty, id)
-	u.open("")
+	id := cur.ID
+	u.ask(prompt{
+		title: "Delete note?", text: "“" + label(*cur) + "” will be deleted on all devices.", ok: "Delete", danger: true,
+		run: func(string) {
+			u.notes = slices.DeleteFunc(u.notes, func(n note.Note) bool { return n.ID == id })
+			u.deleted = append(u.deleted, id)
+			u.changed(id)
+			delete(u.dirty, id)
+			u.open("")
+		},
+	}, "")
 }
 
 // changed marks note id as modified and saves once changes pause.
@@ -439,7 +539,7 @@ func (u *ui) sync(app.Context) {
 			u.syncing = false
 			if err != nil {
 				app.Log(err)
-				u.status = "Not synced. Changes are kept on this device."
+				u.status = "Offline. Changes are kept on this device."
 				if !u.retries {
 					u.retries = true
 					ctx.After(retry, func(ctx app.Context) {
