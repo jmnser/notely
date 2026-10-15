@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"time"
@@ -13,6 +14,14 @@ import (
 )
 
 var client = &http.Client{Timeout: 15 * time.Second}
+
+// errSignedOut is returned when the backend needs a sign-on.
+var errSignedOut = errors.New("signed out")
+
+// signIn starts a session; the backend sets its cookie.
+func signIn(user, password string) error {
+	return call(http.MethodPost, "/api/login", map[string]string{"user": user, "password": password}, nil)
+}
 
 // exchange pushes local changes to the backend and returns its notes.
 func exchange(push []note.Note, deleted []string) ([]note.Note, error) {
@@ -48,6 +57,9 @@ func call(method, path string, in, out any) error {
 		return err
 	}
 	defer res.Body.Close() //nolint:errcheck
+	if res.StatusCode == http.StatusUnauthorized {
+		return errSignedOut
+	}
 	if res.StatusCode >= http.StatusMultipleChoices {
 		return fmt.Errorf("%s %s: %s", method, path, res.Status)
 	}

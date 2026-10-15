@@ -39,6 +39,7 @@ func main() {
 	mux := http.NewServeMux()
 	mux.Handle("/api/", &httputil.ReverseProxy{Rewrite: func(r *httputil.ProxyRequest) {
 		r.SetURL(target)
+		r.SetXForwarded()      // lets the backend mark cookies Secure behind HTTPS
 		r.Out.Host = r.In.Host // keeps the backend's same-origin check valid
 	}})
 	mux.Handle("/web/", http.FileServerFS(web))

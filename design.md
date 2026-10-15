@@ -14,9 +14,19 @@ browser (PWA, wasm) ──► gnotes-web ──/api/──► gnotes-api ──�
 
 ## Backend: `cmd/gnotes-api`
 
-- API: `GET /api/notes`, `PUT /api/notes/{id}` (create or replace), `DELETE /api/notes/{id}`, `GET /healthz`.
+- API: `GET /api/notes`, `PUT /api/notes/{id}` (create or replace), `DELETE /api/notes/{id}`, `GET /healthz`; sign-on: `POST /api/login`, `POST /api/logout`, `GET /api/session`.
 - Both writes are idempotent, so the frontend can safely retry them.
 - Notes live in memory; each one is also a Markdown file, written atomically (temp file + rename) on every change. A failed write leaves the note unchanged.
+
+### Sign-on
+
+- Users live in `<data>/.users.json` (`-users` overrides), a JSON object of user name → argon2id hash in PHC format. A missing file is created with the default user `joe`. All users share the same notes.
+- New hashes: `echo -n 'password' | gnotes-api -hash` (argon2id, 64 MiB, 3 passes, 1 thread, random 16-byte salt). Hashes with other parameters are accepted within bounds.
+- `POST /api/login` checks the password in constant time and sets a random session token as cookie: `HttpOnly`, `SameSite=Strict`, `Secure` behind HTTPS (`gnotes-web` forwards `X-Forwarded-Proto`), valid 30 days. Every other `/api/` call needs it, else 401.
+- Brute force: at most two password checks run at once (each takes 64 MiB), failures wait one second, unknown users cost a hash check like known ones.
+- Sessions are kept in memory: restarting the backend signs everyone out.
+
+The frontend shows a sign-in screen on any 401. Local edits made meanwhile stay pending and sync after signing in. Signing out removes the notes from the device.
 
 ### Files
 
@@ -102,6 +112,7 @@ Rendering stays in the browser so the Go build keeps no cgo or headless browser 
 - Picks up changes made on other devices
 - Material Design 3 look: navigation drawer, search bar, plus button next to search, top app bar, segmented View/Edit button, dialogs, snackbar; M3 baseline colors in light and dark
 - Responsive layout (single pane up to 600px), app icons for installation
+- Sign-on with argon2id passwords and session cookies
 - Cross-origin write protection on both servers
 - Self-contained binaries; releases via svu and GoReleaser
 
@@ -111,7 +122,9 @@ Material Design 3 is implemented in plain CSS (`web/app.css`: M3 color, type, sh
 
 ## Limitations
 
-- No authentication and a single user.
+- Users share one set of notes; there are no per-user notes or permissions.
+- Sessions are lost on backend restart.
+- Run behind HTTPS beyond localhost: over plain HTTP the session cookie and password travel unencrypted.
 - Last write wins: an offline edit can overwrite a newer one, or bring back a note deleted elsewhere.
 - All notes are held in memory, fine for thousands of notes, not for millions.
 - Files changed on disk while the backend runs are not picked up until restart, and are overwritten by the next edit in the app.

@@ -2,6 +2,7 @@ package main
 
 import (
 	"crypto/rand"
+	"errors"
 	"maps"
 	"slices"
 	"strconv"
@@ -62,6 +63,9 @@ type ui struct {
 	htmlSrc   string
 	query     string
 	status    string
+	signedOut bool   // the backend asks for a sign-on
+	signingIn bool   // a sign-on request is running
+	loginErr  string // why the last sign-on failed
 	syncing   bool
 	again     bool // a sync was requested while one was running
 	retries   bool // a retry of a failed sync is scheduled
@@ -172,8 +176,11 @@ func (u *ui) Render() app.UI {
 			app.Ul().Class("tree").Body(app.Range(spaces).Slice(func(i int) app.UI {
 				return u.renderSpace(spaces[i], query != "")
 			})),
-			app.Button().Class("drawer-toggle").Title(toggle).Aria("label", toggle).Aria("expanded", !u.drawer).
-				Body(icon(chevron), app.Span().Text("Collapse")).OnClick(u.toggleDrawer),
+			app.Div().Class("drawer-bottom").Body(
+				app.Button().Class("drawer-toggle").Title(toggle).Aria("label", toggle).Aria("expanded", !u.drawer).
+					Body(icon(chevron), app.Span().Text("Collapse")).OnClick(u.toggleDrawer),
+				iconButton("logout", "Sign out").OnClick(u.signOut),
+			),
 		),
 		app.Main().Body(
 			app.Div().Class("empty").Body(
@@ -223,6 +230,18 @@ func (u *ui) Render() app.UI {
 			app.Button().Class("text-button").Text("Update").Hidden(!u.update).OnClick(func(ctx app.Context, _ app.Event) {
 				ctx.Reload()
 			}),
+		),
+		app.Div().Class("login").Hidden(!u.signedOut).Body(
+			app.Form().Class("login-card").OnSubmit(u.signIn).Body(
+				icon("description"),
+				app.H1().Text("Sign in"),
+				app.Input().ID("login-user").Class("field").Placeholder("User name").Aria("label", "User name").
+					Attr("autocomplete", "username").Attr("autocapitalize", "none").Required(true),
+				app.Input().ID("login-password").Class("field").Type("password").Placeholder("Password").
+					Aria("label", "Password").Attr("autocomplete", "current-password").Required(true),
+				app.P().Class("login-error").Attr("role", "alert").Text(u.loginErr).Hidden(u.loginErr == ""),
+				app.Button().Type("submit").Class("filled-button").Text("Sign in").Disabled(u.signingIn),
+			),
 		),
 		app.Dialog().ID("dialog").Body(
 			app.Form().OnSubmit(u.submit).Body(
@@ -411,6 +430,57 @@ func (u *ui) diagrams() {
 		app.Window().Get("mermaid").Call("run", map[string]any{"querySelector": pending}).
 			Call("catch", app.Window().Get("Boolean"))
 	}
+}
+
+// signIn sends the sign-in form and syncs once signed on.
+func (u *ui) signIn(ctx app.Context, e app.Event) {
+	e.PreventDefault()
+	if u.signingIn {
+		return
+	}
+	user := strings.TrimSpace(app.Window().GetElementByID("login-user").Get("value").String())
+	password := app.Window().GetElementByID("login-password").Get("value").String()
+	u.signingIn, u.loginErr = true, ""
+	ctx.Async(func() {
+		err := signIn(user, password)
+		ctx.Dispatch(func(ctx app.Context) {
+			u.signingIn = false
+			switch {
+			case errors.Is(err, errSignedOut):
+				u.loginErr = "Wrong user name or password."
+			case err != nil:
+				app.Log(err)
+				u.loginErr = "Can't reach the server. Try again."
+			default:
+				u.signedOut = false
+				app.Window().GetElementByID("login-password").Set("value", "")
+				u.sync(ctx)
+			}
+		})
+	})
+}
+
+// signOut ends the session and removes the notes from this device.
+func (u *ui) signOut(app.Context, app.Event) {
+	text := "Notes are removed from this device until you sign in again."
+	unsynced := len(u.dirty) > 0 || len(u.deleted) > 0
+	if unsynced {
+		text = "Changes not synced yet will be lost. " + text
+	}
+	u.ask(prompt{
+		title: "Sign out?", text: text, ok: "Sign out", danger: unsynced,
+		run: func(string) {
+			u.ctx.Async(func() {
+				if err := call("POST", "/api/logout", nil, nil); err != nil {
+					app.Log(err)
+				}
+			})
+			u.notes, u.dirty, u.deleted = nil, map[string]int{}, nil
+			u.ctx.LocalStorage().Del(storageKey)
+			u.open("")
+			u.signedOut = true
+		},
+	}, "")
 }
 
 // rendered returns src as HTML, rendering it only when it changed.
@@ -673,6 +743,9 @@ func (u *ui) persist() {
 // sync pushes pending changes and then adopts the backend's notes. Only one
 // sync runs at a time.
 func (u *ui) sync(app.Context) {
+	if u.signedOut {
+		return
+	}
 	if u.syncing {
 		u.again = true
 		return
@@ -691,6 +764,10 @@ func (u *ui) sync(app.Context) {
 		remote, err := exchange(push, deleted)
 		u.ctx.Dispatch(func(ctx app.Context) {
 			u.syncing = false
+			if errors.Is(err, errSignedOut) || u.signedOut {
+				u.signedOut, u.status = true, "" // local changes stay pending until signed on
+				return
+			}
 			if err != nil {
 				app.Log(err)
 				u.status = "Offline. Changes are kept on this device."
