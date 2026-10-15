@@ -7,9 +7,10 @@ import (
 	"time"
 )
 
-// Note is a single note.
+// Note is a single note: a Markdown file in a space.
 type Note struct {
 	ID      string    `json:"id"`
+	Space   string    `json:"space,omitempty"`
 	Title   string    `json:"title"`
 	Body    string    `json:"body"`
 	Pinned  bool      `json:"pinned"`

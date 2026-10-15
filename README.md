@@ -1,6 +1,6 @@
 # gnotes
 
-Offline-first note taking app. See [design.md](design.md).
+Offline-first Markdown notes, organised in spaces. See [design.md](design.md).
 
 - `gnotes-api`: Go backend, a JSON API storing notes in a file
 - `gnotes-web`: [go-app](https://go-app.dev) PWA frontend and the server hosting it

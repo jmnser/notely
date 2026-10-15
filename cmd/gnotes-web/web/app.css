@@ -43,18 +43,61 @@ header input {
 }
 main header {
   justify-content: flex-end;
+  align-items: center;
 }
-ul {
+.path {
+  margin-right: auto;
+  opacity: 0.7;
+}
+aside ul {
   flex: 1;
   margin: 0;
   padding: 0;
   overflow-y: auto;
   list-style: none;
 }
+aside ul ul {
+  overflow: visible;
+}
+.space {
+  display: flex;
+  align-items: center;
+  padding: 0.25rem 0.5rem 0.25rem 0.25rem;
+  font-size: 0.85rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.space button {
+  padding: 0.25rem 0.4rem;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  opacity: 0.7;
+}
+.space button:hover {
+  opacity: 1;
+}
+.space .name {
+  flex: 1;
+  overflow: hidden;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+  opacity: 1;
+}
+.space .name::before {
+  content: "▾ ";
+}
+.space.collapsed .name::before {
+  content: "▸ ";
+}
 .note {
   display: block;
   width: 100%;
-  padding: 0.6rem 0.75rem;
+  padding: 0.5rem 0.75rem 0.5rem 1.6rem;
   border: 0;
   background: none;
   color: inherit;
@@ -79,7 +122,8 @@ ul {
   opacity: 0.7;
 }
 #title,
-#body {
+#body,
+#view {
   padding: 0.5rem 1rem;
   border: 0;
   outline: 0;
@@ -91,23 +135,77 @@ ul {
   font-size: 1.5rem;
   font-weight: 600;
 }
-#body {
+#body,
+#view {
   flex: 1;
+}
+#body {
   resize: none;
+  font-family: ui-monospace, monospace;
+}
+#view {
+  overflow-y: auto;
+  touch-action: manipulation;
+}
+.markdown:empty::before {
+  content: "Empty. Double-click to edit.";
+  opacity: 0.6;
+}
+.markdown > :first-child {
+  margin-top: 0;
+}
+.markdown li:has(> input[type="checkbox"]) {
+  list-style: none;
+}
+.markdown li > input[type="checkbox"] {
+  margin: 0 0.4em 0 -1.4em;
+  cursor: pointer;
+}
+.markdown pre,
+.markdown code {
+  font-family: ui-monospace, monospace;
+  background: color-mix(in srgb, currentColor 8%, transparent);
+  border-radius: 4px;
+}
+.markdown code {
+  padding: 0.1em 0.3em;
+}
+.markdown pre {
+  padding: 0.75rem;
+  overflow-x: auto;
+}
+.markdown pre code {
+  padding: 0;
+  background: none;
+}
+.markdown blockquote {
+  margin-left: 0;
+  padding-left: 1rem;
+  border-left: 3px solid color-mix(in srgb, currentColor 25%, transparent);
+}
+.markdown table {
+  border-collapse: collapse;
+}
+.markdown th,
+.markdown td {
+  padding: 0.3rem 0.6rem;
+  border: 1px solid color-mix(in srgb, currentColor 20%, transparent);
+}
+.markdown img {
+  max-width: 100%;
 }
 .back {
   display: none;
-  margin-right: auto;
 }
-.app:not(.editing) main {
+.app:not(.open) main {
   visibility: hidden;
 }
 @media (max-width: 40rem) {
   .app {
     grid-template-columns: minmax(0, 1fr);
   }
-  .app.editing aside,
-  .app:not(.editing) main {
+  .app.open aside,
+  .app:not(.open) main {
     display: none;
   }
   .back {

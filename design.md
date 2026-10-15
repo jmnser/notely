@@ -30,13 +30,25 @@ The app is local first:
 
 IDs are generated in the browser, which is what lets notes be created offline.
 
+### Spaces
+
+A note's `space` field names the space it belongs to, like a directory. A space exists as long as it holds notes: creating a space creates its first note, renaming a space moves all its notes, and a space disappears with its last note. Notes without a space are shown under "Notes".
+
+### View and edit mode
+
+A note opens rendered as GitHub Flavored Markdown (goldmark; raw HTML is not rendered). Double-click or "Edit" shows the Markdown source, Escape or "View" goes back. New notes open in edit mode.
+
+Task list checkboxes can be checked in view mode. Each rendered checkbox carries its index; clicking it flips `[ ]`/`[x]` at that task's source offset, taken from the goldmark syntax tree, so code blocks and nested lists stay intact.
+
 ## Shared: `internal`
 
-- `note`: the `Note` model and its sort order (pinned first, then newest).
+- `note`: the `Note` model (space, title, Markdown body, pin) and its sort order (pinned first, then newest).
 - `serve`: HTTP server with timeouts and graceful shutdown.
 
 ## Features
 
+- Spaces (directories) holding notes; create, rename, collapse, move notes between them
+- Notes render as Markdown; double-click to edit the source; check task list items in view mode
 - Create, edit (autosave), pin, delete and full-text search notes
 - Works offline: installable PWA, cached app shell, local copy of all notes, changes sync when the backend is reachable again
 - Picks up changes made on other devices
@@ -49,4 +61,5 @@ IDs are generated in the browser, which is what lets notes be created offline.
 - No authentication and a single user.
 - Last write wins: an offline edit can overwrite a newer one, or bring back a note deleted elsewhere.
 - The whole file is rewritten on each change, fine for thousands of notes, not for millions.
-- Notes are plain text, up to 100 000 characters.
+- Notes are Markdown, up to 100 000 characters.
+- Spaces are flat: no nested spaces.
