@@ -3,7 +3,7 @@
 gnotes is a single-user, offline-first note taking app made of two programs.
 
 ```
-browser (PWA, wasm) ──► gnotes-web ──/api/──► gnotes-api ──► notes.json
+browser (PWA, wasm) ──► gnotes-web ──/api/──► gnotes-api ──► notes/*.md
      localStorage        static files + proxy    JSON API
 ```
 
@@ -16,7 +16,34 @@ browser (PWA, wasm) ──► gnotes-web ──/api/──► gnotes-api ──�
 
 - API: `GET /api/notes`, `PUT /api/notes/{id}` (create or replace), `DELETE /api/notes/{id}`, `GET /healthz`.
 - Both writes are idempotent, so the frontend can safely retry them.
-- Notes live in memory and every write rewrites the JSON file atomically (temp file + rename). A failed write is rolled back.
+- Notes live in memory; each one is also a Markdown file, written atomically (temp file + rename) on every change. A failed write leaves the note unchanged.
+
+### Files
+
+```
+notes/
+  Inbox.md            # no space
+  work/
+    Roadmap.md
+    Roadmap-2.md      # second note titled "Roadmap"
+```
+
+```markdown
+---
+id: 3f2a…
+title: "Roadmap"
+space: "work"
+pinned: true
+updated: 2026-10-15T09:12:00.123Z
+---
+# Q4
+```
+
+- One directory per space, one file per note, named after the title. Characters unsafe on any OS become `-`; names are capped at 100 bytes.
+- Name collisions, compared case-insensitively, get `-2`, `-3`, …; foreign files are never overwritten.
+- The front matter holds all fields, so the path is only derived: renaming a note or changing its space moves its file, and an emptied space directory is removed.
+- The body follows the front matter byte for byte.
+- On start, files and directories starting with `.` (e.g. `.git`) are ignored and files without a valid `id` are skipped with a log line, so the directory can be a git repository.
 - The server stamps `updated`; concurrent edits resolve as last write wins.
 
 ## Frontend: `cmd/gnotes-web`
@@ -86,5 +113,6 @@ Material Design 3 is implemented in plain CSS (`web/app.css`: M3 color, type, sh
 
 - No authentication and a single user.
 - Last write wins: an offline edit can overwrite a newer one, or bring back a note deleted elsewhere.
-- The whole file is rewritten on each change, fine for thousands of notes, not for millions.
+- All notes are held in memory, fine for thousands of notes, not for millions.
+- Files changed on disk while the backend runs are not picked up until restart, and are overwritten by the next edit in the app.
 - Notes are Markdown, up to 100 000 characters.

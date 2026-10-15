@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -33,8 +34,8 @@ func list(t *testing.T, h http.Handler) []note.Note {
 }
 
 func TestAPI(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "notes.json")
-	s, err := openStore(path)
+	dir := t.TempDir()
+	s, err := openStore(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -61,7 +62,7 @@ func TestAPI(t *testing.T) {
 		}
 	}
 
-	s, err = openStore(path)
+	s, err = openStore(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -71,7 +72,7 @@ func TestAPI(t *testing.T) {
 }
 
 func TestAPIRejects(t *testing.T) {
-	s, err := openStore(filepath.Join(t.TempDir(), "notes.json"))
+	s, err := openStore(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -100,12 +101,16 @@ func TestAPIRejects(t *testing.T) {
 }
 
 func TestStoreRollback(t *testing.T) {
-	s, err := openStore(filepath.Join(t.TempDir(), "missing", "notes.json"))
+	dir := t.TempDir()
+	s, err := openStore(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.put(note.Note{ID: "a"}); err == nil {
-		t.Fatal("put into a missing directory succeeded")
+	if err := os.WriteFile(filepath.Join(dir, "work"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.put(note.Note{ID: "a", Space: "work"}); err == nil {
+		t.Fatal("put into a file as space directory succeeded")
 	}
 	if got := s.list(); len(got) != 0 {
 		t.Errorf("failed put kept notes: %+v", got)
