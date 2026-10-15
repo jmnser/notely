@@ -32,7 +32,9 @@ IDs are generated in the browser, which is what lets notes be created offline.
 
 ### Spaces
 
-A note's `space` field names the space it belongs to, like a directory. A space exists as long as it holds notes: creating a space creates its first note, renaming a space moves all its notes, and a space disappears with its last note. Notes without a space are shown under "Notes".
+A note's `space` field is a path like `Work/Projects`: spaces nest with `/`. A space exists as long as it or one of its subspaces holds notes: creating a space or subspace creates its first note, and a space disappears with its last note. Renaming a space moves its whole subtree; a path in the dialog moves it elsewhere. Notes without a space are shown under "Notes".
+
+Pinned spaces sort first on their level. Pins and the hidden sidebar are kept per device in `localStorage`, not synced.
 
 ### View and edit mode
 
@@ -49,7 +51,8 @@ Task list checkboxes can be checked in view mode. Each rendered checkbox carries
 
 ## Features
 
-- Spaces (directories) holding notes; create, rename, collapse, move notes between them
+- Spaces with subspaces holding notes; create, rename, collapse, pin, move notes between them
+- Collapsible sidebar on large screens
 - Notes render as Markdown; double-click to edit the source; check task list items in view mode
 - Lists continue on Enter while editing
 - Create, edit (autosave), pin, delete and full-text search notes
@@ -70,4 +73,3 @@ Material Design 3 is implemented in plain CSS (`web/app.css`: M3 color, type, sh
 - Last write wins: an offline edit can overwrite a newer one, or bring back a note deleted elsewhere.
 - The whole file is rewritten on each change, fine for thousands of notes, not for millions.
 - Notes are Markdown, up to 100 000 characters.
-- Spaces are flat: no nested spaces.

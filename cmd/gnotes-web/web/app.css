@@ -172,6 +172,9 @@ button {
   padding: 0;
   list-style: none;
 }
+.tree li > ul {
+  padding-left: 16px;
+}
 .tree {
   flex: 1;
   overflow-y: auto;
@@ -216,7 +219,16 @@ button {
   font-weight: 400;
 }
 .space .icon-button {
+  width: 32px;
+  height: 32px;
   opacity: 0;
+}
+.space .icon-button .icon {
+  width: 20px;
+  height: 20px;
+}
+.space .icon-button.selected {
+  opacity: 1;
 }
 .space:hover .icon-button,
 .space:focus-within .icon-button {
@@ -233,7 +245,7 @@ button {
   gap: 12px;
   width: 100%;
   min-height: 56px;
-  padding: 8px 16px 8px 40px;
+  padding: 8px 16px 8px 24px;
   border: 0;
   border-radius: 28px;
   background: none;
@@ -287,7 +299,8 @@ main {
   border-radius: 24px;
   background: var(--md-surface);
 }
-.app:not(.open) main > :not(.empty),
+.app:not(.open) main > :not(.empty, .top-bar),
+.app:not(.open) .top-bar > :not(.menu),
 .app.open .empty {
   display: none !important;
 }
@@ -349,6 +362,15 @@ main {
 }
 .back {
   display: none;
+}
+.app.drawer-hidden {
+  grid-template-columns: minmax(0, 1fr);
+}
+.app.drawer-hidden .drawer {
+  display: none;
+}
+.app.drawer-hidden main {
+  margin-left: 8px;
 }
 .segmented {
   display: flex;
@@ -628,6 +650,18 @@ dialog p {
   }
   .back {
     display: inline-grid;
+  }
+  .menu {
+    display: none;
+  }
+  .app:not(.open) .top-bar {
+    display: none;
+  }
+  .app.drawer-hidden .drawer {
+    display: flex;
+  }
+  .app.drawer-hidden main {
+    margin-left: 0;
   }
   .top-bar {
     padding: 8px 4px;
