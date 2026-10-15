@@ -133,18 +133,6 @@ button {
   min-height: 0;
   padding: 12px;
 }
-.brand {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  margin: 8px 16px 4px;
-  font-size: 22px;
-  font-weight: 400;
-  line-height: 28px;
-}
-.brand .icon {
-  color: var(--md-primary);
-}
 .fab {
   display: flex;
   align-items: center;

@@ -131,7 +131,6 @@ func (u *ui) Render() app.UI {
 	// fields, whose values live in the DOM only.
 	return app.Div().Class(class).Body(
 		app.Nav().Class("drawer").Body(
-			app.H1().Class("brand").Body(icon("description"), app.Span().Text("gnotes")),
 			app.Button().Class("fab").Body(icon("new_folder"), app.Span().Text("New space")).OnClick(u.createSpace),
 			app.Label().Class("search").Body(
 				icon("search"),
