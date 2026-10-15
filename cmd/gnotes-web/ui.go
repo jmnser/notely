@@ -17,7 +17,7 @@ const (
 	debounce     = 500 * time.Millisecond
 	retry        = 30 * time.Second
 	storageKey   = "gnotes"
-	drawerKey    = "gnotes-drawer" // the sidebar is hidden
+	drawerKey    = "gnotes-drawer" // the sidebar is collapsed
 	pinnedKey    = "gnotes-pinned" // pinned space paths
 	defaultSpace = "Notes"         // name shown for notes without a space
 )
@@ -54,7 +54,7 @@ type ui struct {
 	current   string          // ID of the open note
 	editing   bool            // the open note shows its Markdown source
 	collapsed map[string]bool // space paths whose content is hidden
-	drawer    bool            // the sidebar is hidden on large screens
+	drawer    bool            // the sidebar is collapsed to a rail on large screens
 	pinned    map[string]bool // pinned space paths, kept on this device
 	dialog    prompt
 	html      string // rendered htmlSrc
@@ -131,8 +131,10 @@ func (u *ui) Render() app.UI {
 		class += " open"
 		space, body = cur.Space, cur.Body
 	}
+	toggle, chevron := "Collapse sidebar", "chevron_left"
 	if u.drawer {
 		class += " drawer-hidden"
+		toggle, chevron = "Expand sidebar", "chevron_right"
 	}
 	view, edit := "", ""
 	if u.editing {
@@ -170,6 +172,8 @@ func (u *ui) Render() app.UI {
 			app.Ul().Class("tree").Body(app.Range(spaces).Slice(func(i int) app.UI {
 				return u.renderSpace(spaces[i], query != "")
 			})),
+			app.Button().Class("drawer-toggle").Title(toggle).Aria("label", toggle).Aria("expanded", !u.drawer).
+				Body(icon(chevron), app.Span().Text("Collapse")).OnClick(u.toggleDrawer),
 		),
 		app.Main().Body(
 			app.Div().Class("empty").Body(
@@ -177,8 +181,6 @@ func (u *ui) Render() app.UI {
 				app.P().Text("Select a note, or create a space to start writing."),
 			),
 			app.Header().Class("top-bar").Body(
-				iconButton("menu", "Toggle sidebar").Class("icon-button menu").Aria("expanded", !u.drawer).
-					OnClick(u.toggleDrawer),
 				iconButton("arrow_back", "Back").Class("icon-button back").OnClick(func(app.Context, app.Event) { u.open("") }),
 				app.Span().Class("path").Body(icon("folder"), app.Span().Text(strings.ReplaceAll(spaceName(space), "/", " / "))),
 				app.Div().Class("segmented").Body(

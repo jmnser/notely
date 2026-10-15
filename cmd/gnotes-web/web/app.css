@@ -91,7 +91,8 @@ button {
 .space-name,
 .note,
 .segmented button,
-.text-button {
+.text-button,
+.drawer-toggle {
   position: relative;
   overflow: hidden;
 }
@@ -99,7 +100,8 @@ button {
 .space-name::after,
 .note::after,
 .segmented button::after,
-.text-button::after {
+.text-button::after,
+.drawer-toggle::after {
   content: "";
   position: absolute;
   inset: 0;
@@ -109,10 +111,10 @@ button {
   transition: opacity 150ms;
   pointer-events: none;
 }
-:is(.icon-button, .space-name, .note, .segmented button, .text-button):hover::after {
+:is(.icon-button, .space-name, .note, .segmented button, .text-button, .drawer-toggle):hover::after {
   opacity: 0.08;
 }
-:is(.icon-button, .space-name, .note, .segmented button, .text-button):active::after {
+:is(.icon-button, .space-name, .note, .segmented button, .text-button, .drawer-toggle):active::after {
   opacity: 0.12;
 }
 
@@ -279,6 +281,40 @@ button {
   letter-spacing: 0.4px;
 }
 
+.drawer-toggle {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  height: 56px;
+  margin-top: auto;
+  padding: 0 16px;
+  border: 0;
+  border-radius: 28px;
+  background: none;
+  color: var(--md-on-surface-variant);
+  font-size: 14px;
+  font-weight: 500;
+  letter-spacing: 0.1px;
+}
+
+/* Collapsed sidebar: a rail with the plus and expand buttons. */
+@media (min-width: 601px) {
+  .app.drawer-hidden {
+    grid-template-columns: 80px minmax(0, 1fr);
+  }
+  .app.drawer-hidden .drawer {
+    align-items: center;
+  }
+  .app.drawer-hidden :is(.search, .tree, .drawer-toggle span) {
+    display: none;
+  }
+  .app.drawer-hidden .drawer-toggle {
+    justify-content: center;
+    width: 56px;
+    padding: 0;
+  }
+}
+
 /* Content pane */
 main {
   display: flex;
@@ -289,8 +325,7 @@ main {
   border-radius: 24px;
   background: var(--md-surface);
 }
-.app:not(.open) main > :not(.empty, .top-bar),
-.app:not(.open) .top-bar > :not(.menu),
+.app:not(.open) main > :not(.empty),
 .app.open .empty {
   display: none !important;
 }
@@ -352,15 +387,6 @@ main {
 }
 .back {
   display: none;
-}
-.app.drawer-hidden {
-  grid-template-columns: minmax(0, 1fr);
-}
-.app.drawer-hidden .drawer {
-  display: none;
-}
-.app.drawer-hidden main {
-  margin-left: 8px;
 }
 .segmented {
   display: flex;
@@ -641,17 +667,8 @@ dialog p {
   .back {
     display: inline-grid;
   }
-  .menu {
+  .drawer-toggle {
     display: none;
-  }
-  .app:not(.open) .top-bar {
-    display: none;
-  }
-  .app.drawer-hidden .drawer {
-    display: flex;
-  }
-  .app.drawer-hidden main {
-    margin-left: 0;
   }
   .top-bar {
     padding: 8px 4px;
