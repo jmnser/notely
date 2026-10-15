@@ -146,8 +146,11 @@ func (u *ui) Render() app.UI {
 					u.edit(func(n *note.Note) { n.Body = v })
 				}).
 				OnKeyDown(func(ctx app.Context, e app.Event) {
-					if e.Get("key").String() == "Escape" {
+					switch e.Get("key").String() {
+					case "Escape":
 						u.setEditing(ctx, false)
+					case "Enter":
+						u.newline(ctx, e)
 					}
 				}),
 		),
@@ -261,6 +264,40 @@ func (u *ui) setEditing(ctx app.Context, on bool) {
 	if on {
 		ctx.Defer(func(app.Context) { app.Window().GetElementByID("body").Call("focus") })
 	}
+}
+
+// newline continues or ends a Markdown list when Enter is pressed in the editor.
+func (u *ui) newline(ctx app.Context, e app.Event) {
+	for _, k := range []string{"shiftKey", "ctrlKey", "altKey", "metaKey", "isComposing"} {
+		if e.Get(k).Bool() {
+			return
+		}
+	}
+	el := ctx.JSSrc()
+	v := el.Get("value").String()
+	start, end := el.Get("selectionStart").Int(), el.Get("selectionEnd").Int()
+	if start != end {
+		return
+	}
+	from, to, insert, ok := continueList(v, byteOffset(v, start))
+	if !ok {
+		return
+	}
+	e.PreventDefault()
+	el.Call("setSelectionRange", utf16Offset(v, from), utf16Offset(v, to))
+	cmd := "insertText"
+	if insert == "" {
+		cmd = "delete"
+	}
+	// execCommand keeps the browser's undo history and fires the input event.
+	if app.Window().Get("document").Call("execCommand", cmd, false, insert).Bool() {
+		return
+	}
+	v = v[:from] + insert + v[to:]
+	el.Set("value", v)
+	c := utf16Offset(v, from+len(insert))
+	el.Call("setSelectionRange", c, c)
+	u.edit(func(n *note.Note) { n.Body = v })
 }
 
 func (u *ui) startEdit(ctx app.Context, e app.Event) {
