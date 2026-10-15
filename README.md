@@ -6,8 +6,8 @@ Offline-first note taking app. See [design.md](design.md).
 - `gnotes-web`: [go-app](https://go-app.dev) PWA frontend and the server hosting it
 
 ```sh
-make run   # http://localhost:8000
-make test lint
+task run   # http://localhost:8000
+task test lint
 ```
 
 | Binary       | Flag    | Default                 |                 |

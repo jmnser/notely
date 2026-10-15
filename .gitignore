@@ -4,3 +4,4 @@
 notes.json*
 /.claude/worktrees/
 .claude-worktree.md
+/.task/

@@ -1,0 +1,42 @@
+version: '3'
+
+tasks:
+  wasm:
+    desc: Build the frontend
+    sources: [go.mod, go.sum, cmd/gnotes-web/*.go, internal/**/*.go]
+    generates: [cmd/gnotes-web/web/app.wasm]
+    env: {GOOS: js, GOARCH: wasm}
+    cmd: go build -ldflags "-s -w" -o cmd/gnotes-web/web/app.wasm ./cmd/gnotes-web
+
+  build:
+    desc: Build both binaries into bin/
+    deps: [wasm]
+    cmd: go build -o bin/ ./cmd/...
+
+  run:
+    desc: Run backend and frontend locally on http://localhost:8000
+    cmds:
+      - task: build
+      - task: serve
+
+  serve:
+    internal: true
+    deps: [serve:api, serve:web]
+
+  serve:api:
+    internal: true
+    cmd: ./bin/gnotes-api
+
+  serve:web:
+    internal: true
+    cmd: ./bin/gnotes-web
+
+  test:
+    desc: Run the tests
+    cmd: go test -race ./...
+
+  lint:
+    desc: Lint server and wasm code
+    cmds:
+      - golangci-lint run
+      - GOOS=js GOARCH=wasm golangci-lint run

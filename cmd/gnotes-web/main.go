@@ -32,7 +32,7 @@ func main() {
 		log.Fatal(err)
 	}
 	if _, err := fs.Stat(web, "web/app.wasm"); err != nil {
-		log.Fatal("frontend is not embedded, build with: make build")
+		log.Fatal("frontend is not embedded, build with: task build")
 	}
 
 	mux := http.NewServeMux()
