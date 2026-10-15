@@ -12,8 +12,9 @@ import (
 	"net/http/httputil"
 	"net/url"
 
-	"github.com/jmnser/gnotes/internal/serve"
 	"github.com/maxence-charriere/go-app/v10/pkg/app"
+
+	"github.com/jmnser/gnotes/internal/serve"
 )
 
 //go:embed web

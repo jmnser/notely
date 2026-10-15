@@ -40,3 +40,9 @@ tasks:
     cmds:
       - golangci-lint run
       - GOOS=js GOARCH=wasm golangci-lint run
+
+  lint:fix:
+    desc: Lint and apply fixes
+    cmds:
+      - golangci-lint run --fix
+      - GOOS=js GOARCH=wasm golangci-lint run --fix

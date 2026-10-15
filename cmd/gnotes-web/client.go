@@ -7,8 +7,9 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/jmnser/gnotes/internal/note"
 	"github.com/maxence-charriere/go-app/v10/pkg/app"
+
+	"github.com/jmnser/gnotes/internal/note"
 )
 
 var client = &http.Client{Timeout: 15 * time.Second}

@@ -7,8 +7,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/jmnser/gnotes/internal/note"
 	"github.com/maxence-charriere/go-app/v10/pkg/app"
+
+	"github.com/jmnser/gnotes/internal/note"
 )
 
 const (
