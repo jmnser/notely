@@ -48,3 +48,16 @@ func TestToggle(t *testing.T) {
 		}
 	}
 }
+
+func TestRenderMermaid(t *testing.T) {
+	got := render("```mermaid\ngraph TD\n  A-->B[\"<b>x</b>\"]\n```\n\n```go\nx\n```\n")
+	want := `<pre class="mermaid">graph TD
+  A--&gt;B[&quot;&lt;b&gt;x&lt;/b&gt;&quot;]
+</pre>`
+	if !strings.Contains(got, want) {
+		t.Errorf("render() = %s, want %s", got, want)
+	}
+	if !strings.Contains(got, `<pre><code class="language-go">`) {
+		t.Errorf("render() changed other code blocks: %s", got)
+	}
+}

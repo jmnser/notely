@@ -43,11 +43,12 @@ func main() {
 	}})
 	mux.Handle("/web/", http.FileServerFS(web))
 	mux.Handle("/", &app.Handler{
-		Name:            "gnotes",
-		Title:           "gnotes",
-		Description:     "Offline-first Markdown notes",
-		ThemeColor:      "#f3edf7",
-		BackgroundColor: "#f3edf7",
+		Name:               "gnotes",
+		Title:              "gnotes",
+		Description:        "Offline-first Markdown notes",
+		ThemeColor:         "#f3edf7",
+		BackgroundColor:    "#f3edf7",
+		CacheableResources: []string{"/web/mermaid/mermaid.min.js"}, // loaded on demand, kept for offline use
 		Icon: app.Icon{
 			Default:  "/web/icon-192.png",
 			Large:    "/web/icon-512.png",

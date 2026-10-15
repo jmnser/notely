@@ -218,49 +218,49 @@ button {
   font-size: 12px;
   font-weight: 400;
 }
-.space .icon-button {
+/* Row actions show on hover and focus; a set pin always shows. */
+:is(.space, .note-row) .icon-button {
   width: 32px;
   height: 32px;
   opacity: 0;
 }
-.space .icon-button .icon {
+:is(.space, .note-row) .icon-button .icon {
   width: 20px;
   height: 20px;
 }
-.space .icon-button.selected {
-  opacity: 1;
-}
-.space:hover .icon-button,
-.space:focus-within .icon-button {
+:is(.space, .note-row) .icon-button.selected,
+:is(.space, .note-row):hover .icon-button,
+:is(.space, .note-row):focus-within .icon-button {
   opacity: 1;
 }
 @media (hover: none) {
-  .space .icon-button {
+  :is(.space, .note-row) .icon-button {
     opacity: 1;
   }
 }
-.note {
+.note-row {
   display: flex;
   align-items: center;
-  gap: 12px;
-  width: 100%;
-  min-height: 56px;
-  padding: 8px 16px 8px 24px;
-  border: 0;
+  padding-right: 4px;
   border-radius: 28px;
-  background: none;
   color: var(--md-on-surface-variant);
-  text-align: left;
 }
-.note.current {
+.note-row.current {
   background: var(--md-secondary-container);
   color: var(--md-on-secondary-container);
 }
-.note-text {
+.note {
   display: flex;
   flex: 1;
   flex-direction: column;
+  justify-content: center;
   min-width: 0;
+  min-height: 56px;
+  padding: 8px 8px 8px 24px;
+  border: 0;
+  border-radius: 28px;
+  background: none;
+  text-align: left;
 }
 .note-title {
   overflow: hidden;
@@ -271,22 +271,12 @@ button {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.note.current .note-title {
+.note-row.current .note-title {
   color: inherit;
 }
 .note-meta {
   font-size: 12px;
   letter-spacing: 0.4px;
-}
-.pin {
-  display: none;
-}
-.pinned .pin {
-  display: flex;
-}
-.pin .icon {
-  width: 18px;
-  height: 18px;
 }
 
 /* Content pane */
@@ -416,9 +406,9 @@ main {
 }
 #title {
   padding: 8px 32px;
-  font-size: 32px;
+  font-size: 24px;
   font-weight: 400;
-  line-height: 40px;
+  line-height: 32px;
 }
 #title::placeholder,
 #body::placeholder {
@@ -459,19 +449,19 @@ main {
   margin-top: 0;
 }
 .markdown h1 {
-  font-size: 28px;
-  font-weight: 400;
-  line-height: 36px;
-}
-.markdown h2 {
-  font-size: 24px;
-  font-weight: 400;
-  line-height: 32px;
-}
-.markdown h3 {
   font-size: 22px;
   font-weight: 400;
   line-height: 28px;
+}
+.markdown h2 {
+  font-size: 18px;
+  font-weight: 500;
+  line-height: 24px;
+}
+.markdown h3 {
+  font-size: 16px;
+  font-weight: 500;
+  line-height: 24px;
 }
 .markdown :is(h4, h5, h6) {
   font-size: 16px;
@@ -674,8 +664,8 @@ dialog p {
   }
   #title {
     padding: 8px 16px;
-    font-size: 28px;
-    line-height: 36px;
+    font-size: 22px;
+    line-height: 28px;
   }
   #view {
     padding: 8px 16px 96px;

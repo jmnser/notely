@@ -76,6 +76,15 @@ func spacePath(name string) string {
 	return ""
 }
 
+// newPath parses a path typed to create something: "Work/" is the space Work,
+// "Work/Ideas" the note Ideas in Work and "Ideas" the note Ideas in the default
+// space. ok is false for an empty path.
+func newPath(path string) (space, title string, ok bool) {
+	path = strings.TrimSpace(path)
+	i := strings.LastIndexByte(path, '/')
+	return spacePath(path[:max(i, 0)]), strings.TrimSpace(path[i+1:]), path != ""
+}
+
 // spaceName is the name of space path s as entered by the user.
 func spaceName(s string) string {
 	if s == "" {

@@ -7,6 +7,11 @@ browser (PWA, wasm) ──► gnotes-web ──/api/──► gnotes-api ──�
      localStorage        static files + proxy    JSON API
 ```
 
+## Principles
+
+1. **Portable, no cgo (top priority).** Everything builds with `CGO_ENABLED=0` for every Go target, including `js/wasm`. The Taskfile and CI set `CGO_ENABLED=0`; GoReleaser builds with it. Only the optional race-detector test (`task test:race`, a CI step) enables cgo, because Go's race detector needs it on Linux. New dependencies must not need cgo: check with `go list -deps -f '{{if .CgoFiles}}{{.ImportPath}}{{end}}' ./...`, which must print nothing.
+2. **Self-contained and offline.** Binaries embed everything the browser needs; no CDNs, web fonts or third-party requests.
+
 ## Backend: `cmd/gnotes-api`
 
 - API: `GET /api/notes`, `PUT /api/notes/{id}` (create or replace), `DELETE /api/notes/{id}`, `GET /healthz`.
@@ -36,6 +41,10 @@ A note's `space` field is a path like `Work/Projects`: spaces nest with `/`. A s
 
 Pinned spaces sort first on their level. Pins and the hidden sidebar are kept per device in `localStorage`, not synced.
 
+Creating starts at the plus button next to the search: type a name. `Ideas` creates the note Ideas in the default space, `Work/Ideas` creates it in Work, and a trailing slash, `Work/`, creates the space Work with a first note. The dialog starts with the open note's space; the plus on a space row starts with that space.
+
+Each note in the sidebar can be pinned, renamed and deleted from its row; the actions show on hover.
+
 ### View and edit mode
 
 A note opens rendered as GitHub Flavored Markdown (goldmark; raw HTML is not rendered). Double-click or "Edit" shows the Markdown source, Escape or "View" goes back. New notes open in edit mode.
@@ -43,6 +52,12 @@ A note opens rendered as GitHub Flavored Markdown (goldmark; raw HTML is not ren
 In the editor, Enter in a list item (`-`, `*`, `+`, `1.`, `- [ ]`) starts the next item with the same indent and marker; numbers count up and task boxes start unchecked. Enter on an empty item removes its marker and ends the list. Shift+Enter inserts a plain newline. Edits go through `execCommand`, so undo keeps working.
 
 Task list checkboxes can be checked in view mode. Each rendered checkbox carries its index; clicking it flips `[ ]`/`[x]` at that task's source offset, taken from the goldmark syntax tree, so code blocks and nested lists stay intact.
+
+### Mermaid
+
+Fenced `mermaid` code blocks render as diagrams. The renderer turns them into `<pre class="mermaid">` with the source still HTML-escaped; the browser draws them with Mermaid's official bundle (`web/mermaid/`, MIT, 11.17.2), embedded in `gnotes-web`. It loads on the first diagram and is cached for offline use. Mermaid runs with `securityLevel: strict` (labels sanitised, no click handlers) and only on a visible view, because it measures text. Invalid diagrams show Mermaid's error diagram.
+
+Rendering stays in the browser so the Go build keeps no cgo or headless browser dependency.
 
 ## Shared: `internal`
 
@@ -53,9 +68,9 @@ Task list checkboxes can be checked in view mode. Each rendered checkbox carries
 
 - Spaces with subspaces holding notes; create, rename, collapse, pin, move notes between them
 - Collapsible sidebar on large screens
-- Notes render as Markdown; double-click to edit the source; check task list items in view mode
+- Notes render as Markdown with Mermaid diagrams; double-click to edit the source; check task list items in view mode
 - Lists continue on Enter while editing
-- Create, edit (autosave), pin, delete and full-text search notes
+- Create notes and spaces by typing a path; edit (autosave), pin, rename, delete and full-text search notes
 - Works offline: installable PWA, cached app shell, local copy of all notes, changes sync when the backend is reachable again
 - Picks up changes made on other devices
 - Material Design 3 look: navigation drawer, search bar, plus button next to search, top app bar, segmented View/Edit button, dialogs, snackbar; M3 baseline colors in light and dark

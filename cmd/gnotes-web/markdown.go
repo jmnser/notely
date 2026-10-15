@@ -15,10 +15,15 @@ import (
 // md renders GitHub Flavored Markdown. Raw HTML in notes is not rendered.
 var md = goldmark.New(goldmark.WithExtensions(extension.GFM))
 
-const checkbox = ` disabled="" type="checkbox"`
+const (
+	checkbox     = ` disabled="" type="checkbox"`
+	mermaidStart = `<pre><code class="language-mermaid">`
+	mermaidEnd   = `</code></pre>`
+)
 
 // render converts markdown to HTML with a single root element. Task list
 // checkboxes are enabled and numbered in data-task, in document order.
+// Mermaid code blocks become <pre class="mermaid"> for Mermaid to draw.
 func render(src string) string {
 	var buf bytes.Buffer
 	if err := md.Convert([]byte(src), &buf); err != nil {
@@ -26,7 +31,7 @@ func render(src string) string {
 	}
 	var out strings.Builder
 	out.WriteString(`<div class="markdown">`)
-	rest := buf.String()
+	rest := mermaidBlocks(buf.String())
 	for i := 0; ; i++ {
 		before, after, ok := strings.Cut(rest, checkbox)
 		out.WriteString(before)
@@ -71,4 +76,20 @@ func toggle(src string, i int) (string, bool) {
 		mark = " "
 	}
 	return src[:o+1] + mark + src[o+2:], true
+}
+
+// mermaidBlocks marks fenced mermaid code blocks in html for Mermaid. Their
+// content stays HTML-escaped; Mermaid reads it as text.
+func mermaidBlocks(html string) string {
+	var out strings.Builder
+	for {
+		before, after, ok := strings.Cut(html, mermaidStart)
+		out.WriteString(before)
+		if !ok {
+			return out.String()
+		}
+		code, rest, _ := strings.Cut(after, mermaidEnd)
+		out.WriteString(`<pre class="mermaid">` + code + `</pre>`)
+		html = rest
+	}
 }

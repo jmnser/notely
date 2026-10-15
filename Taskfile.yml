@@ -1,5 +1,9 @@
 version: '3'
 
+# Portability: everything builds and tests without cgo.
+env:
+  CGO_ENABLED: '0'
+
 tasks:
   wasm:
     desc: Build the frontend
@@ -33,6 +37,11 @@ tasks:
 
   test:
     desc: Run the tests
+    cmd: go test ./...
+
+  test:race:
+    desc: Run the tests with the race detector (needs cgo on Linux; test only)
+    env: {CGO_ENABLED: '1'}
     cmd: go test -race ./...
 
   lint:

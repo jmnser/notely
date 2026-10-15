@@ -34,7 +34,8 @@ type prompt struct {
 	title  string
 	text   string
 	ok     string
-	input  bool // asks for a space name, passed to run
+	input  bool // asks for a text, passed to run
+	list   bool // suggests space paths
 	danger bool
 	run    func(string)
 }
@@ -44,7 +45,8 @@ type prompt struct {
 type ui struct {
 	app.Compo
 
-	ctx       app.Context     // mount context; outlives the elements that trigger events
+	ctx       app.Context // mount context; outlives the elements that trigger events
+	mounted   bool
 	notes     []note.Note     // sorted
 	dirty     map[string]int  // note ID -> seq of its last change not yet pushed
 	deleted   []string        // note IDs whose deletion is not yet pushed
@@ -56,6 +58,7 @@ type ui struct {
 	pinned    map[string]bool // pinned space paths, kept on this device
 	dialog    prompt
 	html      string // rendered htmlSrc
+	mermaid   int    // Mermaid loading state: 0 not loaded, 1 loading, 2 ready
 	htmlSrc   string
 	query     string
 	status    string
@@ -70,7 +73,7 @@ func init() {
 }
 
 func (u *ui) OnMount(ctx app.Context) {
-	u.ctx = ctx
+	u.ctx, u.mounted = ctx, true
 	u.dirty = map[string]int{}
 	u.collapsed = map[string]bool{}
 	var pinned []string
@@ -117,18 +120,15 @@ func (u *ui) Render() app.UI {
 		for s := n.Space; s != ""; s = parentOf(s) {
 			known[s] = true
 		}
-		known[spaceName(n.Space)] = true
+		known[spaceName(n.Space)] = true // offered as "Work/" for paths
 	}
 	spaces := tree(shown, u.pinned)
 	all := slices.Sorted(maps.Keys(known)) // offered in the dialog
 
 	cur := u.find(u.current)
-	class, pin, space, body := "app", "icon-button", "", ""
+	class, space, body := "app", "", ""
 	if cur != nil {
 		class += " open"
-		if cur.Pinned {
-			pin += " selected"
-		}
 		space, body = cur.Space, cur.Body
 	}
 	if u.drawer {
@@ -140,9 +140,17 @@ func (u *ui) Render() app.UI {
 	} else {
 		view = "selected"
 	}
+	listID := ""
+	if u.dialog.list {
+		listID = "spaces"
+	}
 	danger := "text-button"
 	if u.dialog.danger {
 		danger += " danger"
+	}
+
+	if u.mounted && !u.editing {
+		u.ctx.Defer(func(app.Context) { u.diagrams() })
 	}
 
 	// The tree keeps its shape so that go-app never replaces the editor
@@ -155,7 +163,9 @@ func (u *ui) Render() app.UI {
 					app.Input().Type("search").Placeholder("Search notes").Aria("label", "Search notes").
 						OnInput(u.ValueTo(&u.query)),
 				),
-				iconButton("add", "New space").Class("icon-button tonal").OnClick(u.createSpace),
+				iconButton("add", "New note or space").Class("icon-button tonal").OnClick(func(app.Context, app.Event) {
+					u.createNew(space)
+				}, app.EventScope(space)),
 			),
 			app.Ul().Class("tree").Body(app.Range(spaces).Slice(func(i int) app.UI {
 				return u.renderSpace(spaces[i], query != "")
@@ -180,11 +190,9 @@ func (u *ui) Render() app.UI {
 						OnClick(func(ctx app.Context, _ app.Event) { u.setEditing(ctx, true) }),
 				),
 				iconButton("move", "Move to space").OnClick(u.move),
-				iconButton("push_pin", "Pin").Class(pin).Aria("pressed", cur != nil && cur.Pinned).
-					OnClick(func(app.Context, app.Event) {
-						u.edit(func(n *note.Note) { n.Pinned = !n.Pinned })
-					}),
-				iconButton("delete", "Delete").OnClick(u.remove),
+				pinButton("Pin", cur != nil && cur.Pinned).
+					OnClick(func(app.Context, app.Event) { u.togglePin(u.current) }),
+				iconButton("delete", "Delete").OnClick(func(app.Context, app.Event) { u.remove(u.current) }),
 			),
 			app.Input().ID("title").Placeholder("Untitled").MaxLength(200).Aria("label", "Title").
 				OnInput(func(ctx app.Context, _ app.Event) {
@@ -219,9 +227,9 @@ func (u *ui) Render() app.UI {
 				app.H2().Text(u.dialog.title),
 				app.P().Text(u.dialog.text).Hidden(u.dialog.text == ""),
 				app.Input().ID("dialog-input").Class("field").Aria("label", u.dialog.title).
-					Attr("list", "spaces").MaxLength(200).Hidden(!u.dialog.input),
+					Attr("list", listID).MaxLength(200).Hidden(!u.dialog.input),
 				app.DataList().ID("spaces").Body(app.Range(all).Slice(func(i int) app.UI {
-					return app.Option().Value(all[i])
+					return app.Option().Value(all[i] + "/")
 				})),
 				app.Div().Class("actions").Body(
 					app.Button().Type("button").Class("text-button").Text("Cancel").OnClick(func(app.Context, app.Event) {
@@ -238,12 +246,9 @@ func (u *ui) Render() app.UI {
 // searching every space is open.
 func (u *ui) renderSpace(s *space, searching bool) app.UI {
 	open := searching || !u.collapsed[s.path]
-	class, pin := "space", "icon-button"
+	class := "space"
 	if !open {
 		class += " collapsed"
-	}
-	if u.pinned[s.path] {
-		pin += " selected"
 	}
 	return app.Li().Body(
 		app.Div().Class(class).Body(
@@ -254,16 +259,13 @@ func (u *ui) renderSpace(s *space, searching bool) app.UI {
 			).OnClick(func(app.Context, app.Event) {
 				u.collapsed[s.path] = !u.collapsed[s.path]
 			}, app.EventScope(s.path)),
-			iconButton("add", "New note").OnClick(func(app.Context, app.Event) {
-				u.create(s.path)
-			}, app.EventScope(s.path)),
-			iconButton("new_folder", "New subspace").Hidden(s.path == "").OnClick(func(app.Context, app.Event) {
-				u.createSubspace(s.path)
+			iconButton("add", "New note or subspace").OnClick(func(app.Context, app.Event) {
+				u.createNew(s.path)
 			}, app.EventScope(s.path)),
 			iconButton("edit", "Rename space").OnClick(func(app.Context, app.Event) {
 				u.renameSpace(s.path)
 			}, app.EventScope(s.path)),
-			iconButton("push_pin", "Pin space").Class(pin).Aria("pressed", u.pinned[s.path]).
+			pinButton("Pin space", u.pinned[s.path]).
 				OnClick(func(app.Context, app.Event) {
 					u.pinSpace(s.path, !u.pinned[s.path])
 				}, app.EventScope(s.path)),
@@ -281,21 +283,22 @@ func (u *ui) renderSpace(s *space, searching bool) app.UI {
 	)
 }
 
+// renderNote renders note n with its actions.
 func (u *ui) renderNote(n note.Note) app.UI {
-	class := "note"
+	row := "note-row"
 	if n.ID == u.current {
-		class += " current"
+		row += " current"
 	}
-	if n.Pinned {
-		class += " pinned"
-	}
-	return app.Li().Body(app.Button().Class(class).Body(
-		app.Span().Class("note-text").Body(
+	return app.Li().Class(row).Body(
+		app.Button().Class("note").Body(
 			app.Span().Class("note-title").Text(label(n)),
 			app.Span().Class("note-meta").Text(n.Updated.Local().Format("Jan 2, 15:04")),
-		),
-		app.Span().Class("pin").Body(icon("push_pin")),
-	).OnClick(func(app.Context, app.Event) { u.open(n.ID) }, app.EventScope(n.ID)))
+		).OnClick(func(app.Context, app.Event) { u.open(n.ID) }, app.EventScope(n.ID)),
+		iconButton("edit", "Rename").OnClick(func(app.Context, app.Event) { u.rename(n.ID) }, app.EventScope(n.ID)),
+		iconButton("delete", "Delete").OnClick(func(app.Context, app.Event) { u.remove(n.ID) }, app.EventScope(n.ID)),
+		pinButton("Pin", n.Pinned).
+			OnClick(func(app.Context, app.Event) { u.togglePin(n.ID) }, app.EventScope(n.ID)),
+	)
 }
 
 // label is the name of a note in the list.
@@ -351,7 +354,12 @@ func (u *ui) ask(p prompt, value string) {
 	in.Set("value", value)
 	u.ctx.Defer(func(app.Context) {
 		app.Window().GetElementByID("dialog").Call("showModal")
-		if p.input {
+		switch {
+		case !p.input:
+		case strings.HasSuffix(value, "/"): // continue typing after the space
+			end := utf16Offset(value, len(value))
+			in.Call("setSelectionRange", end, end)
+		default:
 			in.Call("select")
 		}
 	})
@@ -365,6 +373,41 @@ func (u *ui) submit(_ app.Context, e app.Event) {
 	u.dialog.run = nil
 	if run != nil {
 		run(v)
+	}
+}
+
+// diagrams draws the Mermaid diagrams of the view, loading Mermaid on first use.
+// Mermaid needs a visible view to measure text.
+func (u *ui) diagrams() {
+	const pending = "#view pre.mermaid:not([data-processed])"
+	doc := app.Window().Get("document")
+	if doc.Call("querySelector", pending).IsNull() {
+		return
+	}
+	switch u.mermaid {
+	case 0:
+		u.mermaid = 1
+		script := doc.Call("createElement", "script")
+		script.Set("src", "/web/mermaid/mermaid.min.js")
+		script.Call("addEventListener", "load", app.FuncOf(func(app.Value, []app.Value) any {
+			u.ctx.Dispatch(func(app.Context) {
+				theme := "default"
+				if app.Window().Call("matchMedia", "(prefers-color-scheme: dark)").Get("matches").Bool() {
+					theme = "dark"
+				}
+				app.Window().Get("mermaid").Call("initialize", map[string]any{
+					"startOnLoad": false, "securityLevel": "strict", "theme": theme,
+				})
+				u.mermaid = 2
+				u.diagrams()
+			})
+			return nil
+		}))
+		doc.Get("head").Call("appendChild", script)
+	case 2:
+		// Mermaid draws errors into the diagram; the rejected promise needs no handling.
+		app.Window().Get("mermaid").Call("run", map[string]any{"querySelector": pending}).
+			Call("catch", app.Window().Get("Boolean"))
 	}
 }
 
@@ -465,46 +508,44 @@ func (u *ui) check(_ app.Context, e app.Event) {
 	app.Window().GetElementByID("body").Set("value", body)
 }
 
-// create adds a note to space and opens it in edit mode.
-func (u *ui) create(space string) {
-	n := note.Note{ID: rand.Text(), Space: space, Updated: time.Now()}
+// create adds a note titled title to space and opens it in edit mode.
+func (u *ui) create(space, title string) {
+	n := note.Note{ID: rand.Text(), Space: space, Title: title, Updated: time.Now()}
 	u.notes = append(u.notes, n)
 	u.expand(space)
 	u.changed(n.ID)
 	u.open(n.ID)
 	u.editing = true
-	u.ctx.Defer(func(app.Context) { app.Window().GetElementByID("title").Call("focus") })
+	focus := "body"
+	if title == "" {
+		focus = "title"
+	}
+	u.ctx.Defer(func(app.Context) { app.Window().GetElementByID(focus).Call("focus") })
 }
 
-// createSpace creates a space with a first note in it. A space exists as long
-// as it has notes.
-func (u *ui) createSpace(app.Context, app.Event) {
+// createNew asks for a path and creates a note, or with a trailing "/" a space
+// with a first note; a space exists as long as it has notes. The path starts
+// in space.
+func (u *ui) createNew(space string) {
+	value := ""
+	if space != "" {
+		value = space + "/"
+	}
 	u.ask(prompt{
-		title: "New space", text: "A space holds notes, like a folder.", ok: "Create", input: true,
-		run: func(name string) {
-			if name != "" {
-				u.create(spacePath(name))
+		title: "New", text: "Type a note name, or end with / for a space: Ideas, Work/, Work/Ideas.", ok: "Create",
+		input: true, list: true,
+		run: func(path string) {
+			if space, title, ok := newPath(path); ok {
+				u.create(space, title)
 			}
 		},
-	}, "")
-}
-
-// createSubspace creates a subspace of parent with a first note in it.
-func (u *ui) createSubspace(parent string) {
-	u.ask(prompt{
-		title: "New subspace", text: "Inside " + strings.ReplaceAll(parent, "/", " / ") + ".", ok: "Create", input: true,
-		run: func(name string) {
-			if name = spacePath(name); name != "" {
-				u.create(parent + "/" + name)
-			}
-		},
-	}, "")
+	}, value)
 }
 
 // renameSpace moves space s with its subspaces and notes to another path.
 func (u *ui) renameSpace(s string) {
 	u.ask(prompt{
-		title: "Rename space", text: "Use / for subspaces, e.g. Work/Projects.", ok: "Rename", input: true,
+		title: "Rename space", text: "Use / for subspaces, e.g. Work/Projects.", ok: "Rename", input: true, list: true,
 		run: func(name string) {
 			name = spacePath(name)
 			if name == s || s == "" && name == "" {
@@ -539,7 +580,8 @@ func (u *ui) move(app.Context, app.Event) {
 		return
 	}
 	u.ask(prompt{
-		title: "Move to space", text: "Pick a space or type a new path, e.g. Work/Projects.", ok: "Move", input: true,
+		title: "Move to space", text: "Pick a space or type a new path, e.g. Work/Projects.", ok: "Move",
+		input: true, list: true,
 		run: func(name string) {
 			s := spacePath(name)
 			u.edit(func(n *note.Note) { n.Space = s })
@@ -550,27 +592,55 @@ func (u *ui) move(app.Context, app.Event) {
 
 // edit applies f to the open note.
 func (u *ui) edit(f func(*note.Note)) {
-	if n := u.find(u.current); n != nil {
+	u.editNote(u.current, f)
+}
+
+// editNote applies f to note id.
+func (u *ui) editNote(id string, f func(*note.Note)) {
+	if n := u.find(id); n != nil {
 		f(n)
 		n.Updated = time.Now()
 		u.changed(n.ID)
 	}
 }
 
-func (u *ui) remove(app.Context, app.Event) {
-	cur := u.find(u.current)
-	if cur == nil {
+func (u *ui) togglePin(id string) {
+	u.editNote(id, func(n *note.Note) { n.Pinned = !n.Pinned })
+}
+
+// rename asks for a new title of note id.
+func (u *ui) rename(id string) {
+	n := u.find(id)
+	if n == nil {
 		return
 	}
-	id := cur.ID
 	u.ask(prompt{
-		title: "Delete note?", text: "“" + label(*cur) + "” will be deleted on all devices.", ok: "Delete", danger: true,
+		title: "Rename note", ok: "Rename", input: true,
+		run: func(title string) {
+			u.editNote(id, func(n *note.Note) { n.Title = title })
+			if id == u.current {
+				app.Window().GetElementByID("title").Set("value", title)
+			}
+		},
+	}, n.Title)
+}
+
+// remove asks to delete note id.
+func (u *ui) remove(id string) {
+	n := u.find(id)
+	if n == nil {
+		return
+	}
+	u.ask(prompt{
+		title: "Delete note?", text: "“" + label(*n) + "” will be deleted on all devices.", ok: "Delete", danger: true,
 		run: func(string) {
 			u.notes = slices.DeleteFunc(u.notes, func(n note.Note) bool { return n.ID == id })
 			u.deleted = append(u.deleted, id)
 			u.changed(id)
 			delete(u.dirty, id)
-			u.open("")
+			if id == u.current {
+				u.open("")
+			}
 		},
 	}, "")
 }

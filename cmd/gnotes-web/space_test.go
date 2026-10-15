@@ -63,3 +63,20 @@ func TestWithin(t *testing.T) {
 		}
 	}
 }
+
+func TestNewPath(t *testing.T) {
+	for in, want := range map[string]string{
+		"Ideas":           "|Ideas|true",
+		" Work/ ":         "Work||true",
+		"Work/Ideas":      "Work|Ideas|true",
+		"Work / Sub/ Doc": "Work/Sub|Doc|true",
+		"Notes/x":         "|x|true",
+		"/":               "||true",
+		"  ":              "||false",
+	} {
+		space, title, ok := newPath(in)
+		if got := fmt.Sprintf("%s|%s|%v", space, title, ok); got != want {
+			t.Errorf("newPath(%q) = %s, want %s", in, got, want)
+		}
+	}
+}
