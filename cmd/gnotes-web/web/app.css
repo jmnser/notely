@@ -442,9 +442,9 @@ main {
 }
 #title {
   padding: 8px 32px;
-  font-size: 24px;
-  font-weight: 400;
-  line-height: 32px;
+  font-size: 18px;
+  font-weight: 500;
+  line-height: 24px;
 }
 #title::placeholder,
 #body::placeholder {
@@ -753,8 +753,6 @@ dialog p {
   }
   #title {
     padding: 8px 16px;
-    font-size: 22px;
-    line-height: 28px;
   }
   #view {
     padding: 8px 16px 96px;
