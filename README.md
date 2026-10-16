@@ -32,6 +32,8 @@ docker run -d --name gnotes-api --network gnotes -v gnotes:/data gnotes-api:v1.2
 docker run -d --name gnotes-web --network gnotes -p 8000:8000 gnotes-web:v1.2.3
 ```
 
+Releases push both images, for `linux/amd64` and `linux/arm64`, to `docker.io/<DOCKERHUB_USERNAME>/gnotes-{api,web}`, tagged with the version and `latest`. The release workflow needs the repository variable `DOCKERHUB_USERNAME` and the secret `DOCKERHUB_TOKEN`, a Docker Hub access token with read and write access.
+
 Both run as UID 65532 and listen on all interfaces: `gnotes-api` on 8001 with notes in `/data`, `gnotes-web` on 8000 proxying to `http://gnotes-api:8001` (override with `-api=...`).
 
 ## Podman, systemd and Tailscale Funnel
