@@ -19,6 +19,7 @@ task test lint
 | `gnotes-api` | `-hash`          |                         | print the argon2id hash of a password read from stdin |
 | `gnotes-web` | `-addr`          | `localhost:8000`        | listen address                                        |
 | `gnotes-web` | `-api`           | `http://localhost:8001` | backend URL                                           |
+| `gnotes-web` | `-base`          |                         | path prefix to serve under, e.g. `/gnotes`            |
 
 ## Container images
 
@@ -32,6 +33,53 @@ docker run -d --name gnotes-web --network gnotes -p 8000:8000 gnotes-web:v1.2.3
 ```
 
 Both run as UID 65532 and listen on all interfaces: `gnotes-api` on 8001 with notes in `/data`, `gnotes-web` on 8000 proxying to `http://gnotes-api:8001` (override with `-api=...`).
+
+## Podman, systemd and Tailscale Funnel
+
+Run both containers as rootless Quadlet services and publish them at `https://<host>.<tailnet>.ts.net/gnotes`. Build the images with `podman build --target api -t gnotes-api .` and `podman build --target web -t gnotes-web .`, then:
+
+```sh
+mkdir -p /data/gnotes ~/.config/containers/systemd
+cd ~/.config/containers/systemd
+printf '[Network]\n' > gnotes.network
+cat > gnotes-api.container <<'UNIT'
+[Container]
+ContainerName=gnotes-api
+Image=localhost/gnotes-api:latest
+UserNS=keep-id:uid=65532,gid=65532
+Network=gnotes.network
+Volume=/data/gnotes:/data
+
+[Service]
+Restart=always
+
+[Install]
+WantedBy=default.target
+UNIT
+cat > gnotes-web.container <<'UNIT'
+[Unit]
+Requires=gnotes-api.service
+After=gnotes-api.service
+
+[Container]
+ContainerName=gnotes-web
+Image=localhost/gnotes-web:latest
+Network=gnotes.network
+PublishPort=127.0.0.1:8000:8000
+Exec=-addr=:8000 -api=http://gnotes-api:8001 -base=/gnotes
+
+[Service]
+Restart=always
+
+[Install]
+WantedBy=default.target
+UNIT
+systemctl --user daemon-reload
+systemctl --user start gnotes-web
+tailscale funnel --bg --set-path=/gnotes http://127.0.0.1:8000/gnotes
+```
+
+`UserNS=keep-id:uid=65532,gid=65532` maps your user to the image's user, so `/data/gnotes` stays yours. `-base=/gnotes` serves the app under that path. Check with `tailscale funnel status` and `journalctl --user -u gnotes-api`.
 
 ## Sign-on
 

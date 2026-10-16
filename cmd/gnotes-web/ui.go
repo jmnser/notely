@@ -417,7 +417,7 @@ func (u *ui) diagrams() {
 	case 0:
 		u.mermaid = 1
 		script := doc.Call("createElement", "script")
-		script.Set("src", "/web/mermaid/mermaid.min.js")
+		script.Set("src", app.Getenv("GOAPP_STATIC_RESOURCES_URL")+"/mermaid/mermaid.min.js")
 		script.Call("addEventListener", "load", app.FuncOf(func(app.Value, []app.Value) any {
 			u.ctx.Dispatch(func(app.Context) {
 				theme := "default"

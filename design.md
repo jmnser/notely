@@ -22,7 +22,7 @@ browser (PWA, wasm) ──► gnotes-web ──/api/──► gnotes-api ──�
 
 - Users live in `<data>/.users.json` (`-users` overrides), a JSON object of user name → argon2id hash in PHC format. A missing file is created with the default user `joe`. All users share the same notes.
 - New hashes: `echo -n 'password' | gnotes-api -hash` (argon2id, 64 MiB, 3 passes, 1 thread, random 16-byte salt). Hashes with other parameters are accepted within bounds.
-- `POST /api/login` checks the password in constant time and sets a random session token as cookie: `HttpOnly`, `SameSite=Strict`, `Secure` behind HTTPS (`gnotes-web` forwards `X-Forwarded-Proto`), valid 30 days. Every other `/api/` call needs it, else 401.
+- `POST /api/login` checks the password in constant time and sets a random session token as cookie: `HttpOnly`, `SameSite=Strict`, `Secure` behind HTTPS (`gnotes-web` forwards `X-Forwarded-Proto`, keeping `https` from a proxy in front), valid 30 days. Every other `/api/` call needs it, else 401.
 - Brute force: at most two password checks run at once (each takes 64 MiB), failures wait one second, unknown users cost a hash check like known ones.
 - Sessions are kept in memory: restarting the backend signs everyone out.
 
