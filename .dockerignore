@@ -1,0 +1,8 @@
+# Allowlist: only sources go into the build context.
+*
+!go.mod
+!go.sum
+!cmd/
+!internal/
+cmd/gnotes-web/web/app.wasm
+**/*_test.go

@@ -1,0 +1,69 @@
+version: '3'
+
+# Portability: everything builds and tests without cgo.
+env:
+  CGO_ENABLED: '0'
+
+tasks:
+  wasm:
+    desc: Build the frontend
+    sources: [go.mod, go.sum, cmd/gnotes-web/*.go, internal/**/*.go]
+    generates: [cmd/gnotes-web/web/app.wasm]
+    env: {GOOS: js, GOARCH: wasm}
+    cmd: go build -ldflags "-s -w" -o cmd/gnotes-web/web/app.wasm ./cmd/gnotes-web
+
+  build:
+    desc: Build both binaries into bin/
+    deps: [wasm]
+    cmd: go build -o bin/ ./cmd/...
+
+  run:
+    desc: Run backend and frontend locally on http://localhost:8000
+    cmds:
+      - task: build
+      - task: serve
+
+  serve:
+    internal: true
+    deps: [serve:api, serve:web]
+
+  serve:api:
+    internal: true
+    cmd: ./bin/gnotes-api
+
+  serve:web:
+    internal: true
+    cmd: ./bin/gnotes-web
+
+  image:
+    desc: Build the gnotes-api and gnotes-web container images, tagged with VERSION
+    vars:
+      REVISION:
+        sh: git rev-parse HEAD
+      TAG: '{{.VERSION | default (print "v0.0.0-" (trunc 7 .REVISION))}}'
+    cmds:
+      - for: [api, web]
+        cmd: >-
+          docker build --target {{.ITEM}} -t gnotes-{{.ITEM}}:{{.TAG}}
+          --build-arg VERSION={{.TAG}} --build-arg REVISION={{.REVISION}} .
+
+  test:
+    desc: Run the tests
+    cmd: go test ./...
+
+  test:race:
+    desc: Run the tests with the race detector (needs cgo on Linux; test only)
+    env: {CGO_ENABLED: '1'}
+    cmd: go test -race ./...
+
+  lint:
+    desc: Lint server and wasm code
+    cmds:
+      - golangci-lint run
+      - GOOS=js GOARCH=wasm golangci-lint run
+
+  lint:fix:
+    desc: Lint and apply fixes
+    cmds:
+      - golangci-lint run --fix
+      - GOOS=js GOARCH=wasm golangci-lint run --fix

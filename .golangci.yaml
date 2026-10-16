@@ -1,0 +1,79 @@
+# Based on operator-template's .golangci.yaml.
+version: "2"
+
+run:
+  timeout: 10m
+  allow-parallel-runners: true
+
+linters:
+  default: none
+  enable:
+    # Stability & correctness
+    - errcheck
+    - govet
+    - staticcheck
+    - unused
+    - bodyclose
+    - errorlint
+    - ineffassign
+    - copyloopvar
+
+    # Style & maintainability
+    - dupl
+    - goconst
+    - gocyclo
+    - lll
+    - misspell
+    - nakedret
+    - unconvert
+    - unparam
+    - revive
+    - gocritic
+
+    # Modern & idiomatic
+    - modernize
+    - sloglint
+    - prealloc
+
+    # Security & performance
+    - gosec
+    - perfsprint
+
+  settings:
+    staticcheck:
+      checks:
+        - all
+        - '-ST1000'
+        - '-ST1020'
+    revive:
+      rules:
+        - name: comment-spacings
+        - name: import-shadowing
+        - name: package-comments
+          disabled: true
+        - name: dot-imports
+          disabled: true
+
+  exclusions:
+    generated: lax
+    rules:
+      - path: _test\.go
+        linters:
+          - errcheck
+          - goconst
+          - gosec
+          - lll
+
+formatters:
+  enable:
+    - gci
+    - gofmt
+    - gofumpt
+    - goimports
+  settings:
+    gci:
+      custom-order: true
+      sections:
+        - standard
+        - default
+        - localmodule

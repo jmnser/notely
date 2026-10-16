@@ -1,0 +1,61 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+# Portability: everything builds and tests without cgo.
+env:
+  CGO_ENABLED: '0'
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        target: [linux/amd64, js/wasm]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - name: Set target
+        run: |
+          echo "GOOS=${TARGET%/*}" >> "$GITHUB_ENV"
+          echo "GOARCH=${TARGET#*/}" >> "$GITHUB_ENV"
+        env:
+          TARGET: ${{ matrix.target }}
+      - uses: golangci/golangci-lint-action@v9
+        with:
+          version: v2.14.0
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - run: go test ./...
+      - name: Race detector (needs cgo; test only)
+        run: go test -race ./...
+        env:
+          CGO_ENABLED: '1'
+
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - uses: goreleaser/goreleaser-action@v7
+        with:
+          version: v2.18.3
+          args: release --snapshot --clean

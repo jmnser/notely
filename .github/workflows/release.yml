@@ -1,0 +1,35 @@
+name: release
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - name: Tag next version
+        id: tag
+        run: |
+          svu="go run github.com/caarlos0/svu/v3@v3.4.1"
+          next=$($svu next)
+          [ "$next" = "$($svu current)" ] && exit 0
+          git tag "$next"
+          git push origin "$next"
+          echo "next=$next" >> "$GITHUB_OUTPUT"
+      - uses: goreleaser/goreleaser-action@v7
+        if: steps.tag.outputs.next
+        with:
+          version: v2.18.3
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
