@@ -38,7 +38,7 @@ Both run as UID 65532 and listen on all interfaces: `gnotes-api` on 8001 with no
 
 ## Podman, systemd and Tailscale Funnel
 
-Run both containers as rootless Quadlet services and publish them at `https://<host>.<tailnet>.ts.net/gnotes`. Build the images with `podman build --target api -t gnotes-api .` and `podman build --target web -t gnotes-web .`, then:
+Run both containers as rootless Quadlet services and publish them at `https://<host>.<tailnet>.ts.net/gnotes`. Replace `<user>` with the Docker Hub user, then:
 
 ```sh
 mkdir -p /data/gnotes ~/.config/containers/systemd
@@ -47,7 +47,7 @@ printf '[Network]\n' > gnotes.network
 cat > gnotes-api.container <<'UNIT'
 [Container]
 ContainerName=gnotes-api
-Image=localhost/gnotes-api:latest
+Image=docker.io/<user>/gnotes-api:latest
 UserNS=keep-id:uid=65532,gid=65532
 Network=gnotes.network
 Volume=/data/gnotes:/data
@@ -65,7 +65,7 @@ After=gnotes-api.service
 
 [Container]
 ContainerName=gnotes-web
-Image=localhost/gnotes-web:latest
+Image=docker.io/<user>/gnotes-web:latest
 Network=gnotes.network
 PublishPort=127.0.0.1:8000:8000
 Exec=-addr=:8000 -api=http://gnotes-api:8001 -base=/gnotes
