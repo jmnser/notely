@@ -12,7 +12,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/jmnser/gnotes/internal/note"
+	"github.com/jmnser/notely/internal/note"
 )
 
 // store keeps notes in memory and persists each one as <dir>/<space>/<title>.md.

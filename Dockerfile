@@ -13,30 +13,30 @@ COPY . .
 ARG TARGETOS TARGETARCH VERSION
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
-    GOOS=js GOARCH=wasm go build -trimpath -ldflags "-s -w" -o cmd/gnotes-web/web/app.wasm ./cmd/gnotes-web && \
+    GOOS=js GOARCH=wasm go build -trimpath -ldflags "-s -w" -o cmd/notely-web/web/app.wasm ./cmd/notely-web && \
     GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath -ldflags "-s -w -X main.version=$VERSION" -o /out/ ./cmd/... && \
     mkdir /out/data
 
 FROM gcr.io/distroless/static-debian13:nonroot@sha256:e2e927ec666bae08560abb3c55d0659eceabb657f56b6782ab500a9fc7f555e3 AS base
 ARG VERSION REVISION
-LABEL org.opencontainers.image.source="https://github.com/jmnser/gnotes" \
+LABEL org.opencontainers.image.source="https://github.com/jmnser/notely" \
       org.opencontainers.image.version="$VERSION" \
       org.opencontainers.image.revision="$REVISION"
 USER 65532:65532
 
 FROM base AS api
-LABEL org.opencontainers.image.title="gnotes-api"
+LABEL org.opencontainers.image.title="notely-api"
 # Group 0 and g=u let OpenShift's random UIDs write the data too.
 COPY --from=build --chown=65532:0 --chmod=0770 /out/data /data
-COPY --from=build /out/gnotes-api /gnotes-api
+COPY --from=build /out/notely-api /notely-api
 VOLUME /data
 EXPOSE 8001
-ENTRYPOINT ["/gnotes-api"]
+ENTRYPOINT ["/notely-api"]
 CMD ["-addr=:8001", "-data=/data"]
 
 FROM base AS web
-LABEL org.opencontainers.image.title="gnotes-web"
-COPY --from=build /out/gnotes-web /gnotes-web
+LABEL org.opencontainers.image.title="notely-web"
+COPY --from=build /out/notely-web /notely-web
 EXPOSE 8000
-ENTRYPOINT ["/gnotes-web"]
-CMD ["-addr=:8000", "-api=http://gnotes-api:8001"]
+ENTRYPOINT ["/notely-web"]
+CMD ["-addr=:8000", "-api=http://notely-api:8001"]

@@ -294,7 +294,7 @@ func (s *syncer) push(ctx context.Context, user string) (string, error) {
 	commit := ""
 	if !st.IsClean() {
 		h, err := wt.Commit(fmt.Sprintf("sync: %d notes changed", len(st)), &git.CommitOptions{
-			Author: &object.Signature{Name: "gnotes", Email: user + "@gnotes.invalid", When: time.Now()},
+			Author: &object.Signature{Name: "notely", Email: user + "@notely.invalid", When: time.Now()},
 		})
 		if err != nil {
 			return "", fmt.Errorf("commit: %w", err)

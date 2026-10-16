@@ -12,11 +12,11 @@ func TestWithBase(t *testing.T) {
 	echo := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte(r.URL.Path)) })
 	for _, tc := range []struct{ base, path, want string }{
 		{"", "/web/app.css", "/web/app.css"},
-		{"/gnotes", "/gnotes", "/"},
-		{"/gnotes", "/gnotes/", "/"},
-		{"/gnotes", "/gnotes/api/notes", "/api/notes"},
-		{"/gnotes", "/gnotesx", "404"},
-		{"/gnotes", "/api/notes", "404"},
+		{"/notely", "/notely", "/"},
+		{"/notely", "/notely/", "/"},
+		{"/notely", "/notely/api/notes", "/api/notes"},
+		{"/notely", "/notelyx", "404"},
+		{"/notely", "/api/notes", "404"},
 	} {
 		w := httptest.NewRecorder()
 		withBase(tc.base, echo).ServeHTTP(w, httptest.NewRequest(http.MethodGet, tc.path, nil))

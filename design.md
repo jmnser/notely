@@ -1,9 +1,9 @@
 # Design
 
-gnotes is a single-user, offline-first note taking app made of two programs.
+notely is a single-user, offline-first note taking app made of two programs.
 
 ```
-browser (PWA, wasm) ──► gnotes-web ──/api/──► gnotes-api ──► notes/*.md
+browser (PWA, wasm) ──► notely-web ──/api/──► notely-api ──► notes/*.md
      localStorage        static files + proxy    JSON API
 ```
 
@@ -12,7 +12,7 @@ browser (PWA, wasm) ──► gnotes-web ──/api/──► gnotes-api ──�
 1. **Portable, no cgo (top priority).** Everything builds with `CGO_ENABLED=0` for every Go target, including `js/wasm`. The Taskfile and CI set `CGO_ENABLED=0`; GoReleaser builds with it. Only the optional race-detector test (`task test:race`, a CI step) enables cgo, because Go's race detector needs it on Linux. New dependencies must not need cgo: check with `go list -deps -f '{{if .CgoFiles}}{{.ImportPath}}{{end}}' ./...`, which must print nothing.
 2. **Self-contained and offline.** Binaries embed everything the browser needs; no CDNs, web fonts or third-party requests.
 
-## Backend: `cmd/gnotes-api`
+## Backend: `cmd/notely-api`
 
 - API: `GET /api/notes`, `PUT /api/notes/{id}` (create or replace), `DELETE /api/notes/{id}`, `GET /healthz`; sign-on: `POST /api/login`, `POST /api/logout`, `GET /api/session`.
 - Both writes are idempotent, so the frontend can safely retry them.
@@ -21,8 +21,8 @@ browser (PWA, wasm) ──► gnotes-web ──/api/──► gnotes-api ──�
 ### Sign-on
 
 - Users live in `<data>/.users.json` (`-users` overrides), a JSON object of user name → argon2id hash in PHC format. A missing file is created with the default user `joe`. All users share the same notes.
-- New hashes: `echo -n 'password' | gnotes-api -hash` (argon2id, 64 MiB, 3 passes, 1 thread, random 16-byte salt). Hashes with other parameters are accepted within bounds.
-- `POST /api/login` checks the password in constant time and sets a random session token as cookie: `HttpOnly`, `SameSite=Strict`, `Secure` behind HTTPS (`gnotes-web` forwards `X-Forwarded-Proto`, keeping `https` from a proxy in front), valid 30 days. Every other `/api/` call needs it, else 401.
+- New hashes: `echo -n 'password' | notely-api -hash` (argon2id, 64 MiB, 3 passes, 1 thread, random 16-byte salt). Hashes with other parameters are accepted within bounds.
+- `POST /api/login` checks the password in constant time and sets a random session token as cookie: `HttpOnly`, `SameSite=Strict`, `Secure` behind HTTPS (`notely-web` forwards `X-Forwarded-Proto`, keeping `https` from a proxy in front), valid 30 days. Every other `/api/` call needs it, else 401.
 - Brute force: at most two password checks run at once (each takes 64 MiB), failures wait one second, unknown users cost a hash check like known ones.
 - Sessions are kept in memory: restarting the backend signs everyone out.
 
@@ -66,14 +66,14 @@ updated: 2026-10-15T09:12:00.123Z
 - On start, files and directories starting with `.` (e.g. `.git`) are ignored and files without a valid `id` are skipped with a log line, so the directory can be a git repository.
 - The server stamps `updated`; concurrent edits resolve as last write wins.
 
-## Frontend: `cmd/gnotes-web`
+## Frontend: `cmd/notely-web`
 
 One package built twice:
 
 - as WebAssembly it is the app that runs in the browser;
 - as a native binary it embeds that wasm and CSS, serves the PWA shell and proxies `/api/` to the backend. Browser and API therefore share one origin, so no CORS is needed.
 
-Size: the wasm calls the backend with the browser's `fetch`, not `net/http`, which keeps Go's TLS and HTTP client stack out of it (10 MB instead of 15 MB). `gnotes-web` serves the embedded `.wasm`, `.js`, `.css` and `.svg` files gzip-compressed (2.6 MB for the wasm, 1 MB for Mermaid), compressing each once on first request, and tells go-app the uncompressed wasm size for its loading progress.
+Size: the wasm calls the backend with the browser's `fetch`, not `net/http`, which keeps Go's TLS and HTTP client stack out of it (10 MB instead of 15 MB). `notely-web` serves the embedded `.wasm`, `.js`, `.css` and `.svg` files gzip-compressed (2.6 MB for the wasm, 1 MB for Mermaid), compressing each once on first request, and tells go-app the uncompressed wasm size for its loading progress.
 
 The app is local first:
 
@@ -104,7 +104,7 @@ Task list checkboxes can be checked in view mode. Each rendered checkbox carries
 
 ### Mermaid
 
-Fenced `mermaid` code blocks render as diagrams. The renderer turns them into `<pre class="mermaid">` with the source still HTML-escaped; the browser draws them with Mermaid's official bundle (`web/mermaid/`, MIT, 11.17.2), embedded in `gnotes-web`. It loads on the first diagram and is cached for offline use. Mermaid runs with `securityLevel: strict` (labels sanitised, no click handlers) and only on a visible view, because it measures text. Invalid diagrams show Mermaid's error diagram.
+Fenced `mermaid` code blocks render as diagrams. The renderer turns them into `<pre class="mermaid">` with the source still HTML-escaped; the browser draws them with Mermaid's official bundle (`web/mermaid/`, MIT, 11.17.2), embedded in `notely-web`. It loads on the first diagram and is cached for offline use. Mermaid runs with `securityLevel: strict` (labels sanitised, no click handlers) and only on a visible view, because it measures text. Invalid diagrams show Mermaid's error diagram.
 
 Rendering stays in the browser so the Go build keeps no cgo or headless browser dependency.
 

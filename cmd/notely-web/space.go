@@ -4,7 +4,7 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/jmnser/gnotes/internal/note"
+	"github.com/jmnser/notely/internal/note"
 )
 
 // space is a node of the space tree. A space path separates subspaces with

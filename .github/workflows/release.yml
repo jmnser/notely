@@ -47,7 +47,7 @@ jobs:
       matrix:
         target: [api, web]
     env:
-      IMAGE: docker.io/${{ vars.DOCKERHUB_USERNAME }}/gnotes-${{ matrix.target }}
+      IMAGE: docker.io/${{ vars.DOCKERHUB_USERNAME }}/notely-${{ matrix.target }}
       VERSION: ${{ needs.release.outputs.next }}
     steps:
       - uses: actions/checkout@v7
