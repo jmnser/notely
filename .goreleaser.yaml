@@ -2,16 +2,16 @@ version: 2
 
 before:
   hooks:
-    - env GOOS=js GOARCH=wasm go build -ldflags "-s -w" -o cmd/gnotes-web/web/app.wasm ./cmd/gnotes-web
+    - env GOOS=js GOARCH=wasm go build -ldflags "-s -w" -o cmd/notely-web/web/app.wasm ./cmd/notely-web
 
 builds:
   - &build
-    id: gnotes-api
-    main: ./cmd/gnotes-api
-    binary: gnotes-api
+    id: notely-api
+    main: ./cmd/notely-api
+    binary: notely-api
     env: [CGO_ENABLED=0]
     goarch: [amd64, arm64]
   - <<: *build
-    id: gnotes-web
-    main: ./cmd/gnotes-web
-    binary: gnotes-web
+    id: notely-web
+    main: ./cmd/notely-web
+    binary: notely-web

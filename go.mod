@@ -1,4 +1,4 @@
-module github.com/jmnser/gnotes
+module github.com/jmnser/notely
 
 go 1.27.1
 

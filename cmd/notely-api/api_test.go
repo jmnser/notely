@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jmnser/gnotes/internal/note"
+	"github.com/jmnser/notely/internal/note"
 )
 
 func request(t *testing.T, h http.Handler, method, path, body string, header ...string) *httptest.ResponseRecorder {

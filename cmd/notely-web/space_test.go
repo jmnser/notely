@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jmnser/gnotes/internal/note"
+	"github.com/jmnser/notely/internal/note"
 )
 
 func TestTree(t *testing.T) {

@@ -1,4 +1,4 @@
-// Command gnotes-api is the gnotes backend: a JSON API storing notes as Markdown files.
+// Command notely-api is the notely backend: a JSON API storing notes as Markdown files.
 package main
 
 import (
@@ -13,7 +13,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/jmnser/gnotes/internal/serve"
+	"github.com/jmnser/notely/internal/serve"
 )
 
 func main() {

@@ -6,7 +6,7 @@ import (
 	"net/http"
 	"regexp"
 
-	"github.com/jmnser/gnotes/internal/note"
+	"github.com/jmnser/notely/internal/note"
 )
 
 const maxBody = 1 << 20

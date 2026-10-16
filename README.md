@@ -1,9 +1,9 @@
-# gnotes
+# notely
 
 Offline-first Markdown notes, organised in spaces. See [design.md](design.md).
 
-- `gnotes-api`: Go backend, a JSON API storing notes as Markdown files
-- `gnotes-web`: [go-app](https://go-app.dev) PWA frontend and the server hosting it
+- `notely-api`: Go backend, a JSON API storing notes as Markdown files
+- `notely-web`: [go-app](https://go-app.dev) PWA frontend and the server hosting it
 
 ```sh
 task run   # http://localhost:8000
@@ -12,45 +12,45 @@ task test lint
 
 | Binary       | Flag             | Default                 |                                                       |
 | ------------ | ---------------- | ----------------------- | ----------------------------------------------------- |
-| `gnotes-api` | `-addr`          | `localhost:8001`        | listen address                                        |
-| `gnotes-api` | `-data`          | `notes`                 | notes directory                                       |
-| `gnotes-api` | `-users`         | `<data>/.users.json`    | users file                                            |
-| `gnotes-api` | `-sync-interval` | `1h`                    | git backup interval, `0` for manual only              |
-| `gnotes-api` | `-hash`          |                         | print the argon2id hash of a password read from stdin |
-| `gnotes-web` | `-addr`          | `localhost:8000`        | listen address                                        |
-| `gnotes-web` | `-api`           | `http://localhost:8001` | backend URL                                           |
-| `gnotes-web` | `-base`          |                         | path prefix to serve under, e.g. `/gnotes`            |
+| `notely-api` | `-addr`          | `localhost:8001`        | listen address                                        |
+| `notely-api` | `-data`          | `notes`                 | notes directory                                       |
+| `notely-api` | `-users`         | `<data>/.users.json`    | users file                                            |
+| `notely-api` | `-sync-interval` | `1h`                    | git backup interval, `0` for manual only              |
+| `notely-api` | `-hash`          |                         | print the argon2id hash of a password read from stdin |
+| `notely-web` | `-addr`          | `localhost:8000`        | listen address                                        |
+| `notely-web` | `-api`           | `http://localhost:8001` | backend URL                                           |
+| `notely-web` | `-base`          |                         | path prefix to serve under, e.g. `/notely`            |
 
 ## Container images
 
-`task image` builds `gnotes-api` and `gnotes-web` on distroless (`static-debian13:nonroot`), tagged with `VERSION` (default `v0.0.0-<commit>`).
+`task image` builds `notely-api` and `notely-web` on distroless (`static-debian13:nonroot`), tagged with `VERSION` (default `v0.0.0-<commit>`).
 
 ```sh
 task image VERSION=v1.2.3
-docker network create gnotes
-docker run -d --name gnotes-api --network gnotes -v gnotes:/data gnotes-api:v1.2.3
-docker run -d --name gnotes-web --network gnotes -p 8000:8000 gnotes-web:v1.2.3
+docker network create notely
+docker run -d --name notely-api --network notely -v notely:/data notely-api:v1.2.3
+docker run -d --name notely-web --network notely -p 8000:8000 notely-web:v1.2.3
 ```
 
-Releases push both images, for `linux/amd64` and `linux/arm64`, to `docker.io/<DOCKERHUB_USERNAME>/gnotes-{api,web}`, tagged with the version and `latest`. The release workflow needs the repository variable `DOCKERHUB_USERNAME` and the secret `DOCKERHUB_TOKEN`, a Docker Hub access token with read and write access.
+Releases push both images, for `linux/amd64` and `linux/arm64`, to `docker.io/<DOCKERHUB_USERNAME>/notely-{api,web}`, tagged with the version and `latest`. The release workflow needs the repository variable `DOCKERHUB_USERNAME` and the secret `DOCKERHUB_TOKEN`, a Docker Hub access token with read and write access.
 
-Both run as UID 65532 and listen on all interfaces: `gnotes-api` on 8001 with notes in `/data`, `gnotes-web` on 8000 proxying to `http://gnotes-api:8001` (override with `-api=...`).
+Both run as UID 65532 and listen on all interfaces: `notely-api` on 8001 with notes in `/data`, `notely-web` on 8000 proxying to `http://notely-api:8001` (override with `-api=...`).
 
 ## Podman, systemd and Tailscale Funnel
 
-Run both containers as rootless Quadlet services and publish them at `https://<host>.<tailnet>.ts.net/gnotes`. Replace `<user>` with the Docker Hub user, then:
+Run both containers as rootless Quadlet services and publish them at `https://<host>.<tailnet>.ts.net/notely`. Replace `<user>` with the Docker Hub user, then:
 
 ```sh
-mkdir -p /data/gnotes ~/.config/containers/systemd
+mkdir -p /data/notely ~/.config/containers/systemd
 cd ~/.config/containers/systemd
-printf '[Network]\n' > gnotes.network
-cat > gnotes-api.container <<'UNIT'
+printf '[Network]\n' > notely.network
+cat > notely-api.container <<'UNIT'
 [Container]
-ContainerName=gnotes-api
-Image=docker.io/<user>/gnotes-api:latest
+ContainerName=notely-api
+Image=docker.io/<user>/notely-api:latest
 UserNS=keep-id:uid=65532,gid=65532
-Network=gnotes.network
-Volume=/data/gnotes:/data
+Network=notely.network
+Volume=/data/notely:/data
 
 [Service]
 Restart=always
@@ -58,17 +58,17 @@ Restart=always
 [Install]
 WantedBy=default.target
 UNIT
-cat > gnotes-web.container <<'UNIT'
+cat > notely-web.container <<'UNIT'
 [Unit]
-Requires=gnotes-api.service
-After=gnotes-api.service
+Requires=notely-api.service
+After=notely-api.service
 
 [Container]
-ContainerName=gnotes-web
-Image=docker.io/<user>/gnotes-web:latest
-Network=gnotes.network
+ContainerName=notely-web
+Image=docker.io/<user>/notely-web:latest
+Network=notely.network
 PublishPort=127.0.0.1:8000:8000
-Exec=-addr=:8000 -api=http://gnotes-api:8001 -base=/gnotes
+Exec=-addr=:8000 -api=http://notely-api:8001 -base=/notely
 
 [Service]
 Restart=always
@@ -77,18 +77,18 @@ Restart=always
 WantedBy=default.target
 UNIT
 systemctl --user daemon-reload
-systemctl --user start gnotes-web
-tailscale funnel --bg --set-path=/gnotes http://127.0.0.1:8000/gnotes
+systemctl --user start notely-web
+tailscale funnel --bg --set-path=/notely http://127.0.0.1:8000/notely
 ```
 
-`UserNS=keep-id:uid=65532,gid=65532` maps your user to the image's user, so `/data/gnotes` stays yours. `-base=/gnotes` serves the app under that path. Check with `tailscale funnel status` and `journalctl --user -u gnotes-api`.
+`UserNS=keep-id:uid=65532,gid=65532` maps your user to the image's user, so `/data/notely` stays yours. `-base=/notely` serves the app under that path. Check with `tailscale funnel status` and `journalctl --user -u notely-api`.
 
 ## Sign-on
 
-On first start `gnotes-api` creates `<data>/.users.json` with the user `joe`. Add or change users there with hashes from:
+On first start `notely-api` creates `<data>/.users.json` with the user `joe`. Add or change users there with hashes from:
 
 ```sh
-echo -n 'new password' | gnotes-api -hash
+echo -n 'new password' | notely-api -hash
 ```
 
 Serve over HTTPS beyond localhost; see [design.md](design.md#sign-on).

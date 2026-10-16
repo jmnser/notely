@@ -17,7 +17,7 @@ const (
 	defaultUser = "joe"
 	defaultHash = "$argon2id$v=19$m=65536,t=3,p=1$YmUyNzQ5MjdjYjExMGNiM2JkYzA5YTQ3YjRiZDM5NGY$" +
 		"WKqtCW5E9T1E1Klb1kKlaC3Qi660yEtZnc67iibmWZw"
-	cookieName   = "gnotes_session"
+	cookieName   = "notely_session"
 	sessionTTL   = 30 * 24 * time.Hour
 	failureDelay = time.Second
 )
