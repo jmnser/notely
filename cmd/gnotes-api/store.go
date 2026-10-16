@@ -122,7 +122,7 @@ func (s *store) delete(id string) error {
 func (s *store) pathFor(n note.Note, old string) string {
 	base := fileName(n.Title, "untitled")
 	if n.Space != "" {
-		base = filepath.Join(fileName(n.Space, "unnamed"), base)
+		base = filepath.Join(s.spaceDir(fileName(n.Space, "unnamed")), base)
 	}
 	if numbered(old, base) {
 		return old
@@ -145,6 +145,19 @@ func (s *store) pathFor(n note.Note, old string) string {
 			continue // a file the store does not own
 		}
 		return p
+	}
+}
+
+// spaceDir returns the first of dir, dir-2, ... that is not a file.
+func (s *store) spaceDir(dir string) string {
+	for i := 1; ; i++ {
+		d := dir
+		if i > 1 {
+			d = fmt.Sprintf("%s-%d", dir, i)
+		}
+		if fi, err := os.Lstat(filepath.Join(s.dir, d)); err != nil || fi.IsDir() {
+			return d
+		}
 	}
 }
 

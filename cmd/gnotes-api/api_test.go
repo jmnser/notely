@@ -101,6 +101,26 @@ func TestAPIRejects(t *testing.T) {
 }
 
 func TestStoreRollback(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores directory permissions")
+	}
+	dir := t.TempDir()
+	s, err := openStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(dir, "work"), 0o500); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.put(note.Note{ID: "a", Space: "work"}); err == nil {
+		t.Fatal("put into a read-only space directory succeeded")
+	}
+	if got := s.list(); len(got) != 0 {
+		t.Errorf("failed put kept notes: %+v", got)
+	}
+}
+
+func TestStoreSpaceFile(t *testing.T) {
 	dir := t.TempDir()
 	s, err := openStore(dir)
 	if err != nil {
@@ -109,10 +129,10 @@ func TestStoreRollback(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "work"), nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.put(note.Note{ID: "a", Space: "work"}); err == nil {
-		t.Fatal("put into a file as space directory succeeded")
+	if _, err := s.put(note.Note{ID: "a", Space: "work", Title: "x"}); err != nil {
+		t.Fatal(err)
 	}
-	if got := s.list(); len(got) != 0 {
-		t.Errorf("failed put kept notes: %+v", got)
+	if got := s.paths["a"]; got != filepath.Join("work-2", "x.md") {
+		t.Errorf("path = %s, want work-2/x.md", got)
 	}
 }

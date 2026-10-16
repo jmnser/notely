@@ -43,7 +43,11 @@ func main() {
 		users, err = loadUsers(*usersFile)
 	}
 	if err == nil {
-		sy := newSyncer(*data)
+		names := map[string]bool{}
+		for name := range users {
+			names[name] = true
+		}
+		sy := newSyncer(*data, names)
 		ctx, stop := context.WithCancel(context.Background())
 		go sy.run(ctx, *interval)
 

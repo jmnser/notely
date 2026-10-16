@@ -56,8 +56,9 @@ type syncStatus struct {
 // <dir>/<user>/settings.json, token (mode 0600) and repo, a clone the notes
 // are mirrored into; only the notes' .md files are committed.
 type syncer struct {
-	notes string // notes directory
-	dir   string // per-user sync state
+	notes string          // notes directory
+	dir   string          // per-user sync state
+	users map[string]bool // users allowed to sync; state of removed users is kept but idle
 	runs  chan string
 	work  sync.Mutex // one sync at a time
 
@@ -65,9 +66,10 @@ type syncer struct {
 	status map[string]syncStatus
 }
 
-func newSyncer(notes string) *syncer {
+func newSyncer(notes string, users map[string]bool) *syncer {
 	return &syncer{
 		notes:  notes,
+		users:  users,
 		dir:    filepath.Join(notes, ".sync"), // dot files are not notes
 		runs:   make(chan string, 16),
 		status: map[string]syncStatus{},
@@ -116,6 +118,9 @@ func (s *syncer) syncAll(ctx context.Context) {
 }
 
 func (s *syncer) syncUser(ctx context.Context, user string) {
+	if !s.users[user] {
+		return
+	}
 	s.work.Lock()
 	defer s.work.Unlock()
 	commit, err := s.push(ctx, user)
@@ -172,13 +177,25 @@ func (s *syncer) token(user string) (string, error) {
 	return strings.TrimSpace(string(data)), err
 }
 
-// save stores settings and, unless empty, the token.
+// save stores settings and, unless empty, the token. A new repository drops
+// the clone, so the old repository's history is not pushed to it.
 func (s *syncer) save(user string, c syncSettings, token string) error {
+	s.work.Lock()
+	defer s.work.Unlock()
+	old, _, err := s.settings(user)
+	if err != nil && !errors.Is(err, errNotConfigured) {
+		return err
+	}
 	root, err := s.root()
 	if err != nil {
 		return err
 	}
 	defer root.Close() //nolint:errcheck
+	if old.Remote != c.Remote {
+		if err := root.RemoveAll(path.Join(user, "repo")); err != nil {
+			return err
+		}
+	}
 	if err := root.MkdirAll(user, 0o700); err != nil {
 		return err
 	}

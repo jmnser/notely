@@ -47,20 +47,25 @@ func signIn(user, password string) error {
 	return call(post, "/api/login", map[string]string{"user": user, "password": password}, nil)
 }
 
-// exchange pushes local changes to the backend and returns its notes.
-func exchange(push []note.Note, deleted []string) ([]note.Note, error) {
+// exchange pushes local changes to the backend and returns its notes and the
+// notes it rejected, which do not stop the others.
+func exchange(push []note.Note, deleted []string) ([]note.Note, map[string]error, error) {
+	rejected := map[string]error{}
 	for _, n := range push {
-		if err := call(put, "/api/notes/"+n.ID, n, nil); err != nil {
-			return nil, err
+		var bad badRequest
+		if err := call(put, "/api/notes/"+n.ID, n, nil); errors.As(err, &bad) {
+			rejected[n.ID] = err
+		} else if err != nil {
+			return nil, nil, err
 		}
 	}
 	for _, id := range deleted {
 		if err := call(del, "/api/notes/"+id, nil, nil); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 	}
 	var notes []note.Note
-	return notes, call(get, "/api/notes", nil, &notes)
+	return notes, rejected, call(get, "/api/notes", nil, &notes)
 }
 
 // call sends a JSON request to the backend with the browser's fetch and

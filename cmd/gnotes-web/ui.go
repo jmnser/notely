@@ -71,6 +71,7 @@ type ui struct {
 	syncing   bool
 	again     bool // a sync was requested while one was running
 	retries   bool // a retry of a failed sync is scheduled
+	syncGen   int  // bumped on sign-out, so results of older syncs are dropped
 	update    bool // a new app version is available
 }
 
@@ -651,6 +652,8 @@ func (u *ui) signOut(app.Context, app.Event) {
 				}
 			})
 			u.notes, u.dirty, u.deleted = nil, map[string]int{}, nil
+			u.syncGen++
+			u.syncing, u.again = false, false
 			u.ctx.LocalStorage().Del(storageKey)
 			u.open("")
 			u.signedOut = true
@@ -806,13 +809,13 @@ func (u *ui) renameSpace(s string) {
 			}
 			for _, id := range ids {
 				n := u.find(id)
-				n.Space = name + n.Space[len(s):]
+				n.Space = spacePath(name + n.Space[len(s):])
 				u.changed(id)
 			}
 			for p := range maps.Clone(u.pinned) {
 				if within(p, s) {
 					u.pinSpace(p, false)
-					u.pinSpace(name+p[len(s):], true)
+					u.pinSpace(spacePath(name+p[len(s):]), true)
 				}
 			}
 			u.expand(name)
@@ -933,11 +936,14 @@ func (u *ui) sync(app.Context) {
 			push = append(push, n)
 		}
 	}
-	dirty, deleted := maps.Clone(u.dirty), slices.Clone(u.deleted)
+	dirty, deleted, gen := maps.Clone(u.dirty), slices.Clone(u.deleted), u.syncGen
 
 	u.ctx.Async(func() {
-		remote, err := exchange(push, deleted)
+		remote, rejected, err := exchange(push, deleted)
 		u.ctx.Dispatch(func(ctx app.Context) {
+			if gen != u.syncGen { // signed out meanwhile
+				return
+			}
 			u.syncing = false
 			if errors.Is(err, errSignedOut) || u.signedOut {
 				u.signedOut, u.status = true, "" // local changes stay pending until signed on
@@ -956,8 +962,12 @@ func (u *ui) sync(app.Context) {
 				return
 			}
 			u.status = ""
+			for _, err := range rejected {
+				app.Log(err)
+				u.status = "Some notes could not be saved: " + err.Error()
+			}
 			for id, seq := range dirty {
-				if u.dirty[id] == seq {
+				if _, bad := rejected[id]; !bad && u.dirty[id] == seq {
 					delete(u.dirty, id)
 				}
 			}

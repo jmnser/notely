@@ -67,7 +67,7 @@ func TestSync(t *testing.T) {
 	if err := os.Symlink("/etc/hosts", filepath.Join(notes, "leak.md")); err != nil {
 		t.Fatal(err)
 	}
-	s := newSyncer(notes)
+	s := newSyncer(notes, map[string]bool{"ann": true})
 	// save skips validate, so a local path works as remote.
 	if err := s.save("ann", syncSettings{Remote: remote, Branch: "main"}, "tok"); err != nil {
 		t.Fatal(err)
@@ -125,7 +125,7 @@ func TestSync(t *testing.T) {
 
 func TestSyncHandler(t *testing.T) {
 	notes := t.TempDir()
-	s := newSyncer(notes)
+	s := newSyncer(notes, map[string]bool{"ann": true})
 	h := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		r = r.WithContext(context.WithValue(r.Context(), userKey{}, "ann"))
 		s.handler().ServeHTTP(w, r)
@@ -176,5 +176,40 @@ func TestSyncHandler(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(notes, ".sync", "ann")); !os.IsNotExist(err) {
 		t.Error("DELETE left files")
+	}
+}
+
+func TestSyncRemoteChangeAndRemovedUser(t *testing.T) {
+	tmp := t.TempDir()
+	notes, a, b := filepath.Join(tmp, "notes"), filepath.Join(tmp, "a.git"), filepath.Join(tmp, "b.git")
+	for _, r := range []string{a, b} {
+		if _, err := git.PlainInit(r, true); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeNote(t, notes, "Inbox.md", "a")
+	s := newSyncer(notes, map[string]bool{"ann": true})
+	ctx := context.Background()
+	for i, remote := range []string{a, a, b} {
+		if i == 1 {
+			writeNote(t, notes, "Inbox.md", "b") // a second commit in a only
+		}
+		if err := s.save("ann", syncSettings{Remote: remote, Branch: "main"}, "tok"); err != nil {
+			t.Fatal(err)
+		}
+		s.syncUser(ctx, "ann")
+		if st := s.status["ann"]; st.Error != "" {
+			t.Fatal(st.Error)
+		}
+	}
+	if _, n := remoteFiles(t, b); n != 1 {
+		t.Errorf("new repository got %d commits, want 1 without the old history", n)
+	}
+
+	s.users = map[string]bool{} // ann removed from the users file
+	writeNote(t, notes, "Inbox.md", "c")
+	s.syncUser(ctx, "ann")
+	if _, n := remoteFiles(t, b); n != 1 {
+		t.Errorf("removed user synced: %d commits", n)
 	}
 }
