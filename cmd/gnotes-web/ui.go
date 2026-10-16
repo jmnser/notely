@@ -4,7 +4,6 @@ import (
 	"crypto/rand"
 	"errors"
 	"maps"
-	"net/http"
 	"slices"
 	"strconv"
 	"strings"
@@ -497,7 +496,7 @@ func (u *ui) openBackup(app.Context, app.Event) {
 func (u *ui) loadBackup(then func(syncInfo)) {
 	u.ctx.Async(func() {
 		var info syncInfo
-		err := call(http.MethodGet, "/api/sync", nil, &info)
+		err := call(get, "/api/sync", nil, &info)
 		u.ctx.Dispatch(func(app.Context) {
 			if err != nil {
 				u.backupMsg = "Can't load the settings: " + err.Error()
@@ -537,7 +536,7 @@ func (u *ui) saveBackup(ctx app.Context, e app.Event) {
 	}
 	u.backupMsg = "Saving…"
 	ctx.Async(func() {
-		err := call(http.MethodPut, "/api/sync", in, nil)
+		err := call(put, "/api/sync", in, nil)
 		ctx.Dispatch(func(app.Context) {
 			var bad badRequest
 			switch {
@@ -556,7 +555,7 @@ func (u *ui) saveBackup(ctx app.Context, e app.Event) {
 // runBackup asks the backend to sync now.
 func (u *ui) runBackup() {
 	u.ctx.Async(func() {
-		err := call(http.MethodPost, "/api/sync/run", nil, nil)
+		err := call(post, "/api/sync/run", nil, nil)
 		u.ctx.Dispatch(func(app.Context) {
 			if err != nil {
 				u.backupMsg = "Can't start a sync: " + err.Error()
@@ -594,7 +593,7 @@ func (u *ui) removeBackup(app.Context, app.Event) {
 		text: "The settings and token are deleted from the server. The repository stays as it is.",
 		run: func(string) {
 			u.ctx.Async(func() {
-				err := call(http.MethodDelete, "/api/sync", nil, nil)
+				err := call(del, "/api/sync", nil, nil)
 				u.ctx.Dispatch(func(app.Context) {
 					if err != nil {
 						u.backupMsg = "Not removed: " + err.Error()
@@ -647,7 +646,7 @@ func (u *ui) signOut(app.Context, app.Event) {
 		title: "Sign out?", text: text, ok: "Sign out", danger: unsynced,
 		run: func(string) {
 			u.ctx.Async(func() {
-				if err := call("POST", "/api/logout", nil, nil); err != nil {
+				if err := call(post, "/api/logout", nil, nil); err != nil {
 					app.Log(err)
 				}
 			})

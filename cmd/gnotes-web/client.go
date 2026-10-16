@@ -1,12 +1,9 @@
 package main
 
 import (
-	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
-	"net/http"
 	"strings"
 	"time"
 
@@ -15,7 +12,15 @@ import (
 	"github.com/jmnser/gnotes/internal/note"
 )
 
-var client = &http.Client{Timeout: 15 * time.Second}
+const timeout = 15 * time.Second // per backend request
+
+// HTTP methods, spelled out to keep net/http's client out of the wasm binary.
+const (
+	get  = "GET"
+	put  = "PUT"
+	post = "POST"
+	del  = "DELETE"
+)
 
 // errSignedOut is returned when the backend needs a sign-on.
 var errSignedOut = errors.New("signed out")
@@ -39,55 +44,82 @@ type syncInfo struct {
 
 // signIn starts a session; the backend sets its cookie.
 func signIn(user, password string) error {
-	return call(http.MethodPost, "/api/login", map[string]string{"user": user, "password": password}, nil)
+	return call(post, "/api/login", map[string]string{"user": user, "password": password}, nil)
 }
 
 // exchange pushes local changes to the backend and returns its notes.
 func exchange(push []note.Note, deleted []string) ([]note.Note, error) {
 	for _, n := range push {
-		if err := call(http.MethodPut, "/api/notes/"+n.ID, n, nil); err != nil {
+		if err := call(put, "/api/notes/"+n.ID, n, nil); err != nil {
 			return nil, err
 		}
 	}
 	for _, id := range deleted {
-		if err := call(http.MethodDelete, "/api/notes/"+id, nil, nil); err != nil {
+		if err := call(del, "/api/notes/"+id, nil, nil); err != nil {
 			return nil, err
 		}
 	}
 	var notes []note.Note
-	return notes, call(http.MethodGet, "/api/notes", nil, &notes)
+	return notes, call(get, "/api/notes", nil, &notes)
 }
 
+// call sends a JSON request to the backend with the browser's fetch and
+// decodes the JSON response into out. It blocks: run it in Async. fetch,
+// unlike net/http, keeps Go's TLS stack out of the wasm binary.
 func call(method, path string, in, out any) error {
-	var body bytes.Buffer
+	init := map[string]any{
+		"method":      method,
+		"credentials": "same-origin",
+		"signal":      app.Window().Get("AbortSignal").Call("timeout", timeout.Milliseconds()),
+	}
 	if in != nil {
-		if err := json.NewEncoder(&body).Encode(in); err != nil {
+		body, err := json.Marshal(in)
+		if err != nil {
 			return err
 		}
+		init["body"] = string(body)
+		init["headers"] = map[string]any{"Content-Type": "application/json"}
 	}
-	u := *app.Window().URL()
-	u.Path, u.RawQuery, u.Fragment = path, "", ""
-	req, err := http.NewRequest(method, u.String(), &body)
+	res, err := await(app.Window().Call("fetch", path, init))
 	if err != nil {
-		return err
+		return fmt.Errorf("%s %s: %w", method, path, err)
 	}
-	res, err := client.Do(req)
+	text, err := await(res.Call("text"))
 	if err != nil {
-		return err
+		return fmt.Errorf("%s %s: %w", method, path, err)
 	}
-	defer res.Body.Close() //nolint:errcheck
-	if res.StatusCode == http.StatusUnauthorized {
+	switch status := res.Get("status").Int(); {
+	case status == 401:
 		return errSignedOut
-	}
-	if res.StatusCode == http.StatusBadRequest {
-		msg, _ := io.ReadAll(io.LimitReader(res.Body, 512))
-		return badRequest(strings.TrimSpace(string(msg)))
-	}
-	if res.StatusCode >= http.StatusMultipleChoices {
-		return fmt.Errorf("%s %s: %s", method, path, res.Status)
+	case status == 400:
+		return badRequest(strings.TrimSpace(text.String()))
+	case status >= 300:
+		return fmt.Errorf("%s %s: %d %s", method, path, status, res.Get("statusText").String())
 	}
 	if out == nil {
 		return nil
 	}
-	return json.NewDecoder(res.Body).Decode(out)
+	return json.Unmarshal([]byte(text.String()), out)
+}
+
+// await waits for a JavaScript promise.
+func await(promise app.Value) (app.Value, error) {
+	type result struct {
+		v   app.Value
+		err error
+	}
+	done := make(chan result, 1)
+	resolve := app.FuncOf(func(_ app.Value, args []app.Value) any {
+		done <- result{v: args[0]}
+		return nil
+	})
+	reject := app.FuncOf(func(_ app.Value, args []app.Value) any {
+		done <- result{err: errors.New(args[0].Call("toString").String())}
+		return nil
+	})
+	defer resolve.Release()
+	defer reject.Release()
+	promise.Call("then", resolve, reject)
+	r := <-done
+	return r.v, r.err
 }

@@ -73,6 +73,8 @@ One package built twice:
 - as WebAssembly it is the app that runs in the browser;
 - as a native binary it embeds that wasm and CSS, serves the PWA shell and proxies `/api/` to the backend. Browser and API therefore share one origin, so no CORS is needed.
 
+Size: the wasm calls the backend with the browser's `fetch`, not `net/http`, which keeps Go's TLS and HTTP client stack out of it (10 MB instead of 15 MB). `gnotes-web` serves the embedded `.wasm`, `.js`, `.css` and `.svg` files gzip-compressed (2.6 MB for the wasm, 1 MB for Mermaid), compressing each once on first request, and tells go-app the uncompressed wasm size for its loading progress.
+
 The app is local first:
 
 1. Every change (create, edit, pin, delete) is applied to the in-memory list at once and marked pending.

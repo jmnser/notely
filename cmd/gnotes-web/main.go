@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"strconv"
 
 	"github.com/maxence-charriere/go-app/v10/pkg/app"
 
@@ -32,7 +33,8 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	if _, err := fs.Stat(web, "web/app.wasm"); err != nil {
+	wasm, err := fs.Stat(web, "web/app.wasm")
+	if err != nil {
 		log.Fatal("frontend is not embedded, build with: task build")
 	}
 
@@ -42,7 +44,7 @@ func main() {
 		r.SetXForwarded()      // lets the backend mark cookies Secure behind HTTPS
 		r.Out.Host = r.In.Host // keeps the backend's same-origin check valid
 	}})
-	mux.Handle("/web/", http.FileServerFS(web))
+	mux.Handle("/web/", &gzipFiles{fsys: web, next: http.FileServerFS(web)})
 	mux.Handle("/", &app.Handler{
 		Name:               "gnotes",
 		Title:              "gnotes",
@@ -56,8 +58,9 @@ func main() {
 			Maskable: "/web/icon-512.png",
 			SVG:      "/web/icon.svg",
 		},
-		Styles:  []string{"/web/app.css"},
-		Version: version,
+		Styles:            []string{"/web/app.css"},
+		WasmContentLength: strconv.FormatInt(wasm.Size(), 10), // the response may be gzip-compressed
+		Version:           version,
 	})
 	if err := serve.Run(*addr, http.NewCrossOriginProtection().Handler(mux)); err != nil {
 		log.Fatal(err)
