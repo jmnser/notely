@@ -343,8 +343,8 @@ func label(n note.Note) string {
 
 // parentOf returns the parent of space path s, or "" for a top-level space.
 func parentOf(s string) string {
-	if i := strings.LastIndexByte(s, '/'); i >= 0 {
-		return s[:i]
+	if before, _, ok := strings.CutLast(s, "/"); ok {
+		return before
 	}
 	return ""
 }

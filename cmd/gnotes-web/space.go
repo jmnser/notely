@@ -29,8 +29,8 @@ func tree(notes []note.Note, pinned map[string]bool) []*space {
 			return s
 		}
 		parent, name := root, path
-		if i := strings.LastIndexByte(path, '/'); i >= 0 {
-			parent, name = get(path[:i]), path[i+1:]
+		if before, after, ok := strings.CutLast(path, "/"); ok {
+			parent, name = get(before), after
 		}
 		s := &space{path: path, name: spaceName(name), parent: parent}
 		nodes[path] = s
