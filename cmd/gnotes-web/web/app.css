@@ -434,7 +434,7 @@ main {
 #body {
   align-self: center;
   width: 100%;
-  max-width: 880px;
+  max-width: 1760px;
   border: 0;
   outline: 0;
   background: none;
@@ -465,7 +465,7 @@ main {
 }
 #body {
   width: calc(100% - 32px);
-  max-width: 848px;
+  max-width: 1728px;
   margin: 8px 16px 16px;
   padding: 16px;
   border-radius: 16px;
