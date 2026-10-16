@@ -87,4 +87,10 @@ func TestLoadUsers(t *testing.T) {
 	if _, err := loadUsers(path); err == nil {
 		t.Error("accepted an invalid hash")
 	}
+	if err := os.WriteFile(path, []byte(`{"../x":"`+defaultHash+`"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := loadUsers(path); err == nil {
+		t.Error("accepted a user name that is no directory name")
+	}
 }

@@ -28,6 +28,16 @@ browser (PWA, wasm) ──► gnotes-web ──/api/──► gnotes-api ──�
 
 The frontend shows a sign-in screen on any 401. Local edits made meanwhile stay pending and sync after signing in. Signing out removes the notes from the device.
 
+### Git backup
+
+Each user can push the notes to a git repository of their own, set in the app's **Git backup** dialog: repository (`https://` only, no credentials in the URL), branch and token. The API is `GET/PUT/DELETE /api/sync` and `POST /api/sync/run`.
+
+- State per user lives in `<data>/.sync/<user>/`: `settings.json` (repository, branch), `token` (mode 0600) and `repo/`, a clone. The token never leaves this file: it is not committed and not returned by the API, which only reports whether one is set.
+- A sync (go-git, pure Go) fetches the branch, mirrors the notes' `.md` files into the clone, commits if anything changed and pushes without force. Dot files and symbolic links are never copied; all file access goes through `os.Root`.
+- One-way: the app wins. Changes made in the repository are replaced by the next sync, but stay in its history.
+- Syncs run every `-sync-interval` (default 1h), on **Sync now**, after saving the settings and once on shutdown. One sync runs at a time; the last result per user is shown in the dialog.
+- For GitHub use a fine-grained token limited to the one repository with *Contents: read and write*.
+
 ### Files
 
 ```
@@ -113,6 +123,7 @@ Rendering stays in the browser so the Go build keeps no cgo or headless browser 
 - Material Design 3 look: navigation drawer, search bar, plus button next to search, top app bar, segmented View/Edit button, dialogs, snackbar; M3 baseline colors in light and dark
 - Responsive layout (single pane up to 600px), app icons for installation
 - Sign-on with argon2id passwords and session cookies
+- Hourly one-way git backup per user, configured in the app
 - Cross-origin write protection on both servers
 - Self-contained binaries; releases via svu and GoReleaser
 
@@ -123,7 +134,8 @@ Material Design 3 is implemented in plain CSS (`web/app.css`: M3 color, type, sh
 ## Limitations
 
 - Users share one set of notes; there are no per-user notes or permissions.
-- Sessions are lost on backend restart.
+- Sessions and the last git backup results are lost on backend restart.
+- Git backup is one-way; edits made in the repository are not imported.
 - Run behind HTTPS beyond localhost: over plain HTTP the session cookie and password travel unencrypted.
 - Last write wins: an offline edit can overwrite a newer one, or bring back a note deleted elsewhere.
 - All notes are held in memory, fine for thousands of notes, not for millions.

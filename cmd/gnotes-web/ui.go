@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"errors"
 	"maps"
+	"net/http"
 	"slices"
 	"strconv"
 	"strings"
@@ -66,6 +67,8 @@ type ui struct {
 	signedOut bool   // the backend asks for a sign-on
 	signingIn bool   // a sign-on request is running
 	loginErr  string // why the last sign-on failed
+	backup    syncInfo
+	backupMsg string // git backup status shown in its dialog
 	syncing   bool
 	again     bool // a sync was requested while one was running
 	retries   bool // a retry of a failed sync is scheduled
@@ -179,6 +182,7 @@ func (u *ui) Render() app.UI {
 			app.Div().Class("drawer-bottom").Body(
 				app.Button().Class("drawer-toggle").Title(toggle).Aria("label", toggle).Aria("expanded", !u.drawer).
 					Body(icon(chevron), app.Span().Text("Collapse")).OnClick(u.toggleDrawer),
+				iconButton("cloud_upload", "Git backup").OnClick(u.openBackup),
 				iconButton("logout", "Sign out").OnClick(u.signOut),
 			),
 		),
@@ -247,6 +251,7 @@ func (u *ui) Render() app.UI {
 				app.Button().Type("submit").Class("filled-button").Text("Sign in").Disabled(u.signingIn),
 			),
 		),
+		u.renderBackup(),
 		app.Dialog().ID("dialog").Body(
 			app.Form().OnSubmit(u.submit).Body(
 				app.H2().Text(u.dialog.title),
@@ -434,6 +439,173 @@ func (u *ui) diagrams() {
 		app.Window().Get("mermaid").Call("run", map[string]any{"querySelector": pending}).
 			Call("catch", app.Window().Get("Boolean"))
 	}
+}
+
+// renderBackup renders the git backup dialog. Its fields are filled when opened.
+func (u *ui) renderBackup() app.UI {
+	configured := u.backup.Remote != ""
+	hint := "Paste a token"
+	if u.backup.Token {
+		hint = "Saved; leave empty to keep it"
+	}
+	field := func(label string, in app.HTMLInput) app.UI {
+		return app.Label().Class("labeled").Body(app.Span().Text(label), in)
+	}
+	return app.Dialog().ID("backup").Body(
+		app.Form().OnSubmit(u.saveBackup).Body(
+			app.H2().Text("Git backup"),
+			app.P().Text("The notes are pushed to a branch of your repository every hour. "+
+				"Use a token that can write to this repository only."),
+			field("Repository", app.Input().ID("backup-remote").Class("field").Type("url").
+				Placeholder("https://github.com/you/notes.git").Required(true)),
+			field("Branch", app.Input().ID("backup-branch").Class("field").Required(true)),
+			field("Token", app.Input().ID("backup-token").Class("field").Type("password").
+				Placeholder(hint).Attr("autocomplete", "off")),
+			app.P().Class("backup-status").Attr("role", "status").Text(u.backupMsg),
+			app.Div().Class("actions").Body(
+				app.Button().Type("button").Class("text-button danger").Text("Remove").Hidden(!configured).
+					OnClick(u.removeBackup),
+				app.Button().Type("button").Class("text-button").Text("Sync now").Hidden(!configured).
+					OnClick(func(app.Context, app.Event) { u.runBackup() }),
+				app.Span().Class("spacer"),
+				app.Button().Type("button").Class("text-button").Text("Close").OnClick(func(app.Context, app.Event) {
+					app.Window().GetElementByID("backup").Call("close")
+				}),
+				app.Button().Type("submit").Class("text-button").Text("Save"),
+			),
+		),
+	)
+}
+
+// openBackup loads the git backup settings into its dialog.
+func (u *ui) openBackup(app.Context, app.Event) {
+	u.backupMsg = "Loading…"
+	app.Window().GetElementByID("backup").Call("showModal")
+	u.loadBackup(func(info syncInfo) {
+		branch := info.Branch
+		if branch == "" {
+			branch = "main"
+		}
+		for id, v := range map[string]string{"backup-remote": info.Remote, "backup-branch": branch, "backup-token": ""} {
+			app.Window().GetElementByID(id).Set("value", v)
+		}
+	})
+}
+
+// loadBackup fetches the git backup settings, shows their status and passes
+// them to then.
+func (u *ui) loadBackup(then func(syncInfo)) {
+	u.ctx.Async(func() {
+		var info syncInfo
+		err := call(http.MethodGet, "/api/sync", nil, &info)
+		u.ctx.Dispatch(func(app.Context) {
+			if err != nil {
+				u.backupMsg = "Can't load the settings: " + err.Error()
+				return
+			}
+			u.backup, u.backupMsg = info, backupStatus(info)
+			if then != nil {
+				then(info)
+			}
+		})
+	})
+}
+
+// backupStatus describes the last git backup.
+func backupStatus(info syncInfo) string {
+	switch {
+	case info.Remote == "":
+		return "Not set up."
+	case info.Last == nil:
+		return "Not synced yet."
+	}
+	when := info.Last.Time.Local().Format("Jan 2, 15:04")
+	switch {
+	case info.Last.Error != "":
+		return "Last sync " + when + " failed: " + info.Last.Error
+	case info.Last.Commit != "":
+		return "Last sync " + when + ": pushed " + info.Last.Commit[:7] + "."
+	}
+	return "Last sync " + when + ": no changes."
+}
+
+func (u *ui) saveBackup(ctx app.Context, e app.Event) {
+	e.PreventDefault()
+	value := func(id string) string { return app.Window().GetElementByID(id).Get("value").String() }
+	in := map[string]string{
+		"remote": value("backup-remote"), "branch": value("backup-branch"), "token": value("backup-token"),
+	}
+	u.backupMsg = "Saving…"
+	ctx.Async(func() {
+		err := call(http.MethodPut, "/api/sync", in, nil)
+		ctx.Dispatch(func(app.Context) {
+			var bad badRequest
+			switch {
+			case errors.As(err, &bad):
+				u.backupMsg = "Not saved: " + string(bad) + "."
+			case err != nil:
+				u.backupMsg = "Not saved: " + err.Error()
+			default:
+				app.Window().GetElementByID("backup-token").Set("value", "")
+				u.pollBackup()
+			}
+		})
+	})
+}
+
+// runBackup asks the backend to sync now.
+func (u *ui) runBackup() {
+	u.ctx.Async(func() {
+		err := call(http.MethodPost, "/api/sync/run", nil, nil)
+		u.ctx.Dispatch(func(app.Context) {
+			if err != nil {
+				u.backupMsg = "Can't start a sync: " + err.Error()
+				return
+			}
+			u.pollBackup()
+		})
+	})
+}
+
+// pollBackup shows "Syncing…" until the backend reports a newer sync.
+func (u *ui) pollBackup() {
+	var since time.Time
+	if u.backup.Last != nil {
+		since = u.backup.Last.Time
+	}
+	u.backupMsg = "Syncing…"
+	var poll func(tries int)
+	poll = func(tries int) {
+		u.ctx.After(2*time.Second, func(app.Context) {
+			u.loadBackup(func(info syncInfo) {
+				if (info.Last == nil || !info.Last.Time.After(since)) && tries > 0 {
+					u.backupMsg = "Syncing…"
+					poll(tries - 1)
+				}
+			})
+		})
+	}
+	poll(15)
+}
+
+func (u *ui) removeBackup(app.Context, app.Event) {
+	u.ask(prompt{
+		title: "Remove git backup?", ok: "Remove", danger: true,
+		text: "The settings and token are deleted from the server. The repository stays as it is.",
+		run: func(string) {
+			u.ctx.Async(func() {
+				err := call(http.MethodDelete, "/api/sync", nil, nil)
+				u.ctx.Dispatch(func(app.Context) {
+					if err != nil {
+						u.backupMsg = "Not removed: " + err.Error()
+						return
+					}
+					u.backup = syncInfo{}
+					app.Window().GetElementByID("backup").Call("close")
+				})
+			})
+		},
+	}, "")
 }
 
 // signIn sends the sign-in form and syncs once signed on.

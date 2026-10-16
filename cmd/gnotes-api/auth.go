@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/json"
 	"errors"
@@ -38,6 +39,9 @@ func loadUsers(path string) (map[string]argonHash, error) {
 	}
 	users := map[string]argonHash{}
 	for name, s := range hashes {
+		if !validID.MatchString(name) { // names become directory names
+			return nil, fmt.Errorf("read %s: user name %q: use letters, digits, - and _", path, name)
+		}
 		h, err := parseHash(s)
 		if err != nil {
 			return nil, fmt.Errorf("read %s: user %s: %w", path, name, err)
@@ -48,6 +52,14 @@ func loadUsers(path string) (map[string]argonHash, error) {
 		return nil, fmt.Errorf("read %s: no users", path)
 	}
 	return users, nil
+}
+
+type userKey struct{}
+
+// userOf returns the signed-on user of a request passed on by auth.
+func userOf(r *http.Request) string {
+	user, _ := r.Context().Value(userKey{}).(string)
+	return user
 }
 
 type session struct {
@@ -84,11 +96,12 @@ func (a *auth) handler(next http.Handler) http.Handler {
 		http.Error(w, "signed out", http.StatusUnauthorized)
 	})
 	mux.Handle("/api/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if _, ok := a.user(r); !ok {
+		user, ok := a.user(r)
+		if !ok {
 			http.Error(w, "signed out", http.StatusUnauthorized)
 			return
 		}
-		next.ServeHTTP(w, r)
+		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), userKey{}, user)))
 	}))
 	mux.Handle("/", next)
 	return http.NewCrossOriginProtection().Handler(mux)

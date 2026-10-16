@@ -716,6 +716,25 @@ dialog p {
   gap: 8px;
   margin-top: 24px;
 }
+.actions .spacer {
+  flex: 1;
+}
+#backup {
+  width: min(480px, calc(100% - 48px));
+}
+.labeled {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 12px;
+  color: var(--md-on-surface-variant);
+  font-size: 12px;
+  font-weight: 500;
+}
+.backup-status {
+  margin: 16px 0 0;
+  overflow-wrap: anywhere;
+}
 .text-button {
   height: 40px;
   padding: 0 12px;
