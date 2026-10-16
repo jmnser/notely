@@ -188,20 +188,24 @@ func (u *ui) Render() app.UI {
 				app.P().Text("Select a note, or create a space to start writing."),
 			),
 			app.Header().Class("top-bar").Body(
-				iconButton("arrow_back", "Back").Class("icon-button back").OnClick(func(app.Context, app.Event) { u.open("") }),
-				app.Span().Class("path").Body(icon("folder"), app.Span().Text(strings.ReplaceAll(spaceName(space), "/", " / "))),
-				app.Div().Class("segmented").Body(
-					app.Button().Class(view).Title("View").Aria("pressed", !u.editing).
-						Body(icon("visibility"), app.Span().Text("View")).
-						OnClick(func(ctx app.Context, _ app.Event) { u.setEditing(ctx, false) }),
-					app.Button().Class(edit).Title("Edit").Aria("pressed", u.editing).
-						Body(icon("edit"), app.Span().Text("Edit")).
-						OnClick(func(ctx app.Context, _ app.Event) { u.setEditing(ctx, true) }),
+				app.Div().Class("crumbs").Body(
+					iconButton("arrow_back", "Back").Class("icon-button back").OnClick(func(app.Context, app.Event) { u.open("") }),
+					app.Span().Class("path").Body(icon("folder"), app.Span().Text(strings.ReplaceAll(spaceName(space), "/", " / "))),
 				),
-				iconButton("move", "Move to space").OnClick(u.move),
-				pinButton("Pin", cur != nil && cur.Pinned).
-					OnClick(func(app.Context, app.Event) { u.togglePin(u.current) }),
-				iconButton("delete", "Delete").OnClick(func(app.Context, app.Event) { u.remove(u.current) }),
+				app.Div().Class("tools").Body(
+					app.Div().Class("segmented").Body(
+						app.Button().Class(view).Title("View").Aria("pressed", !u.editing).
+							Body(icon("visibility"), app.Span().Text("View")).
+							OnClick(func(ctx app.Context, _ app.Event) { u.setEditing(ctx, false) }),
+						app.Button().Class(edit).Title("Edit").Aria("pressed", u.editing).
+							Body(icon("edit"), app.Span().Text("Edit")).
+							OnClick(func(ctx app.Context, _ app.Event) { u.setEditing(ctx, true) }),
+					),
+					iconButton("move", "Move to space").OnClick(u.move),
+					pinButton("Pin", cur != nil && cur.Pinned).
+						OnClick(func(app.Context, app.Event) { u.togglePin(u.current) }),
+					iconButton("delete", "Delete").OnClick(func(app.Context, app.Event) { u.remove(u.current) }),
+				),
 			),
 			app.Input().ID("title").Placeholder("Untitled").MaxLength(200).Aria("label", "Title").
 				OnInput(func(ctx app.Context, _ app.Event) {

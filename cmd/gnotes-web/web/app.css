@@ -354,19 +354,27 @@ main {
   height: 64px;
   opacity: 0.4;
 }
+/* Path on the left, tools centered above the content. */
 .top-bar {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  min-height: 64px;
+  padding: 8px 12px 8px 24px;
+}
+.crumbs,
+.tools {
   display: flex;
   align-items: center;
   gap: 4px;
-  min-height: 64px;
-  padding: 8px 12px 8px 24px;
+  min-width: 0;
 }
 .path {
   display: flex;
   align-items: center;
   gap: 8px;
   min-width: 0;
-  margin-right: auto;
   color: var(--md-on-surface-variant);
   font-size: 14px;
   font-weight: 500;
@@ -743,7 +751,11 @@ dialog p {
     display: none;
   }
   .top-bar {
+    display: flex;
     padding: 8px 4px;
+  }
+  .crumbs {
+    flex: 1;
   }
   .segmented span {
     display: none;
