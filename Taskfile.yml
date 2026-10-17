@@ -7,10 +7,10 @@ env:
 tasks:
   wasm:
     desc: Build the frontend
-    sources: [go.mod, go.sum, cmd/gnotes-web/*.go, internal/**/*.go]
-    generates: [cmd/gnotes-web/web/app.wasm]
+    sources: [go.mod, go.sum, cmd/notely-web/*.go, internal/**/*.go]
+    generates: [cmd/notely-web/web/app.wasm]
     env: {GOOS: js, GOARCH: wasm}
-    cmd: go build -ldflags "-s -w" -o cmd/gnotes-web/web/app.wasm ./cmd/gnotes-web
+    cmd: go build -ldflags "-s -w" -o cmd/notely-web/web/app.wasm ./cmd/notely-web
 
   build:
     desc: Build both binaries into bin/
@@ -29,14 +29,14 @@ tasks:
 
   serve:api:
     internal: true
-    cmd: ./bin/gnotes-api
+    cmd: ./bin/notely-api
 
   serve:web:
     internal: true
-    cmd: ./bin/gnotes-web
+    cmd: ./bin/notely-web
 
   image:
-    desc: Build the gnotes-api and gnotes-web container images, tagged with VERSION
+    desc: Build the notely-api and notely-web container images, tagged with VERSION
     vars:
       REVISION:
         sh: git rev-parse HEAD
@@ -44,7 +44,7 @@ tasks:
     cmds:
       - for: [api, web]
         cmd: >-
-          docker build --target {{.ITEM}} -t gnotes-{{.ITEM}}:{{.TAG}}
+          docker build --target {{.ITEM}} -t notely-{{.ITEM}}:{{.TAG}}
           --build-arg VERSION={{.TAG}} --build-arg REVISION={{.REVISION}} .
 
   test:

@@ -1,6 +1,6 @@
 //go:build !wasm
 
-// Command gnotes-web serves the gnotes PWA and proxies /api/ to the backend.
+// Command notely-web serves the notely PWA and proxies /api/ to the backend.
 package main
 
 import (
@@ -16,7 +16,7 @@ import (
 
 	"github.com/maxence-charriere/go-app/v10/pkg/app"
 
-	"github.com/jmnser/gnotes/internal/serve"
+	"github.com/jmnser/notely/internal/serve"
 )
 
 //go:embed web
@@ -28,7 +28,7 @@ var version string
 func main() {
 	addr := flag.String("addr", "localhost:8000", "listen address")
 	api := flag.String("api", "http://localhost:8001", "backend URL")
-	base := flag.String("base", "", "path prefix the app is served under, e.g. /gnotes")
+	base := flag.String("base", "", "path prefix the app is served under, e.g. /notely")
 	flag.Parse()
 	if *base = strings.Trim(*base, "/"); *base != "" {
 		*base = "/" + *base
@@ -56,8 +56,8 @@ func main() {
 	}})
 	mux.Handle("/web/", &gzipFiles{fsys: web, next: http.FileServerFS(web)})
 	mux.Handle("/", &app.Handler{
-		Name:               "gnotes",
-		Title:              "gnotes",
+		Name:               "notely",
+		Title:              "notely",
 		Description:        "Offline-first Markdown notes",
 		ThemeColor:         "#f3edf7",
 		BackgroundColor:    "#f3edf7",

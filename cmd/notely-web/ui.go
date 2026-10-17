@@ -11,15 +11,15 @@ import (
 
 	"github.com/maxence-charriere/go-app/v10/pkg/app"
 
-	"github.com/jmnser/gnotes/internal/note"
+	"github.com/jmnser/notely/internal/note"
 )
 
 const (
 	debounce     = 500 * time.Millisecond
 	retry        = 30 * time.Second
-	storageKey   = "gnotes"
-	drawerKey    = "gnotes-drawer" // the sidebar is collapsed
-	pinnedKey    = "gnotes-pinned" // pinned space paths
+	storageKey   = "notely"
+	drawerKey    = "notely-drawer" // the sidebar is collapsed
+	pinnedKey    = "notely-pinned" // pinned space paths
 	defaultSpace = "Notes"         // name shown for notes without a space
 )
 

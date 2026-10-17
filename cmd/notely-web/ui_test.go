@@ -3,7 +3,7 @@ package main
 import (
 	"testing"
 
-	"github.com/jmnser/gnotes/internal/note"
+	"github.com/jmnser/notely/internal/note"
 )
 
 func TestMerge(t *testing.T) {
