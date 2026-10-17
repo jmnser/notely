@@ -6,13 +6,17 @@ package main
 
 import (
 	"bufio"
+	"cmp"
 	"context"
 	"embed"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"io/fs"
 	"log"
+	"maps"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"strconv"
 	"strings"
@@ -67,7 +71,7 @@ func main() {
 		close(synced)
 	}()
 
-	err = serve.Run(*addr, routes(*base, srv, &app.Handler{
+	err = serve.Run(*addr, routes(*base, srv, &manifestID{id: cmp.Or(*base, "/"), next: &app.Handler{
 		Name:               "notely",
 		Title:              "notely",
 		Description:        "Offline-first Markdown notes",
@@ -85,7 +89,7 @@ func main() {
 		Version:           version,
 		Resources:         rootResolver{ResourceResolver: app.PrefixedLocation(*base), root: *base + "/"},
 		RawHeaders:        []string{themeColorScript},
-	}))
+	}}))
 	stop()
 	<-synced // pushes the last changes
 	if err != nil {
@@ -119,6 +123,34 @@ func (r rootResolver) Resolve(location string) string {
 		return r.root
 	}
 	return r.ResourceResolver.Resolve(location)
+}
+
+// manifestID adds id to the web app manifest. Without one, Chrome identifies
+// an installed app by its start URL; the id keeps installs from before the
+// start URL gained its trailing slash the same app, so they update in place.
+type manifestID struct {
+	id   string
+	next http.Handler
+}
+
+func (m *manifestID) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path != "/manifest.webmanifest" {
+		m.next.ServeHTTP(w, r)
+		return
+	}
+	rec := httptest.NewRecorder()
+	m.next.ServeHTTP(rec, r)
+	var manifest map[string]any
+	if rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &manifest) != nil {
+		maps.Copy(w.Header(), rec.Header())
+		w.WriteHeader(rec.Code)
+		_, _ = w.Write(rec.Body.Bytes())
+		return
+	}
+	manifest["id"] = m.id
+	maps.Copy(w.Header(), rec.Header())
+	w.Header().Del("Content-Length")
+	_ = json.NewEncoder(w).Encode(manifest)
 }
 
 // themeColorScript colors the browser and Android system bars like the app's

@@ -3,9 +3,12 @@
 package main
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"github.com/maxence-charriere/go-app/v10/pkg/app"
 )
 
 func TestWithBase(t *testing.T) {
@@ -57,5 +60,39 @@ func TestRoutes(t *testing.T) {
 		if got != tc.want {
 			t.Errorf("base %q, path %q: got %q, want %q", tc.base, tc.path, got, tc.want)
 		}
+	}
+}
+
+func TestRootResolver(t *testing.T) {
+	for _, base := range []string{"", "/notely"} {
+		r := rootResolver{ResourceResolver: app.PrefixedLocation(base), root: base + "/"}
+		if got := r.Resolve("/"); got != base+"/" {
+			t.Errorf("base %q: Resolve(/) = %q, want %q", base, got, base+"/")
+		}
+		if got := r.Resolve("/web/app.css"); got != base+"/web/app.css" {
+			t.Errorf("base %q: Resolve(/web/app.css) = %q", base, got)
+		}
+	}
+}
+
+func TestManifestID(t *testing.T) {
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/manifest+json")
+		_, _ = w.Write([]byte(`{"start_url":"/notely/"}`))
+	})
+	h := &manifestID{id: "/notely", next: next}
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/manifest.webmanifest", nil))
+	var m map[string]string
+	if err := json.Unmarshal(w.Body.Bytes(), &m); err != nil || m["id"] != "/notely" || m["start_url"] != "/notely/" {
+		t.Errorf("manifest = %s (%v)", w.Body, err)
+	}
+	if ct := w.Header().Get("Content-Type"); ct != "application/manifest+json" {
+		t.Errorf("Content-Type = %q", ct)
+	}
+	w = httptest.NewRecorder()
+	h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/app.js", nil))
+	if w.Body.String() != `{"start_url":"/notely/"}` {
+		t.Errorf("other paths changed: %s", w.Body)
 	}
 }
