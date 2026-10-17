@@ -148,6 +148,10 @@ func (m *manifestID) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	manifest["id"] = m.id
+	// Chrome's Android web apps color the navigation bar from the manifest,
+	// which the theme-color script cannot change.
+	dark := map[string]string{"theme_color": "#211f26", "background_color": "#211f26"}
+	manifest["user_preferences"] = map[string]any{"color_scheme": map[string]any{"dark": dark}}
 	maps.Copy(w.Header(), rec.Header())
 	w.Header().Del("Content-Length")
 	_ = json.NewEncoder(w).Encode(manifest)
