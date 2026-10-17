@@ -83,7 +83,8 @@ func main() {
 		Styles:            []string{"/web/app.css"},
 		WasmContentLength: strconv.FormatInt(wasm.Size(), 10), // the response may be gzip-compressed
 		Version:           version,
-		Resources:         app.PrefixedLocation(*base),
+		Resources:         rootResolver{ResourceResolver: app.PrefixedLocation(*base), root: *base + "/"},
+		RawHeaders:        []string{themeColorScript},
 	}))
 	stop()
 	<-synced // pushes the last changes
@@ -106,8 +107,35 @@ func routes(base string, backend, pwa http.Handler) http.Handler {
 	return http.NewCrossOriginProtection().Handler(root)
 }
 
-// withBase serves h under the path prefix base, which itself is the app's
-// root as go-app links it (start URL, service worker).
+// rootResolver resolves the app's root to root, which ends in "/" so that the
+// start URL lies in the service worker's scope (base/) and opens offline.
+type rootResolver struct {
+	app.ResourceResolver
+	root string
+}
+
+func (r rootResolver) Resolve(location string) string {
+	if location == "/" {
+		return r.root
+	}
+	return r.ResourceResolver.Resolve(location)
+}
+
+// themeColorScript colors the browser and Android system bars like the app's
+// surface, following the light or dark color scheme. Manifest colors cannot
+// depend on the scheme.
+const themeColorScript = `<script>
+(() => {
+  const dark = matchMedia("(prefers-color-scheme: dark)");
+  const set = () => document.querySelector('meta[name="theme-color"]')
+    ?.setAttribute("content", dark.matches ? "#211f26" : "#f3edf7");
+  set();
+  dark.addEventListener("change", set);
+})();
+</script>`
+
+// withBase serves h under the path prefix base. The app's root is base/, so
+// base redirects there.
 func withBase(base string, h http.Handler) http.Handler {
 	if base == "" {
 		return h
@@ -116,6 +144,15 @@ func withBase(base string, h http.Handler) http.Handler {
 		rest, ok := strings.CutPrefix(r.URL.Path, base)
 		if !ok || rest != "" && rest[0] != '/' {
 			http.NotFound(w, r)
+			return
+		}
+		if rest == "" {
+			to := base + "/"
+			if r.URL.RawQuery != "" {
+				to += "?" + r.URL.RawQuery
+			}
+			http.Redirect(w, r, to, http.StatusMovedPermanently) //nolint:gosec // fixed local path
+
 			return
 		}
 		r2 := r.Clone(r.Context())

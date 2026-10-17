@@ -73,6 +73,8 @@ type ui struct {
 	retries   bool // a retry of a failed sync is scheduled
 	syncGen   int  // bumped on sign-out, so results of older syncs are dropped
 	update    bool // a new app version is available
+	backGuard bool // a history entry catches the back gesture, see syncBack
+	skipPop   bool // the next popstate comes from syncBack's history.back
 }
 
 func init() {
@@ -103,6 +105,10 @@ func (u *ui) OnMount(ctx app.Context) {
 		u.dirty[id] = 0
 	}
 
+	app.Window().Call("addEventListener", "popstate", app.FuncOf(func(app.Value, []app.Value) any {
+		ctx.Dispatch(u.back)
+		return nil
+	}))
 	for _, event := range []string{"online", "focus"} {
 		app.Window().Call("addEventListener", event, app.FuncOf(func(app.Value, []app.Value) any {
 			ctx.Dispatch(u.sync)
@@ -689,13 +695,49 @@ func (u *ui) open(id string) {
 		u.editing = false
 	}
 	u.current = id
+	u.syncBack()
 	app.Window().GetElementByID("title").Set("value", n.Title)
 	app.Window().GetElementByID("body").Set("value", n.Body)
+}
+
+// syncBack keeps one extra history entry while the back gesture has an
+// in-app step to go (edit mode, an open note), so it does not leave the app.
+func (u *ui) syncBack() {
+	history := app.Window().Get("history")
+	switch inApp := u.editing || u.current != ""; {
+	case inApp && !u.backGuard:
+		history.Call("pushState", nil, "", app.Window().Get("location").Get("href"))
+		u.backGuard = true
+	case !inApp && u.backGuard:
+		u.backGuard, u.skipPop = false, true
+		history.Call("back")
+	}
+}
+
+// back handles the back gesture: edit mode goes to view mode, an open note
+// closes.
+func (u *ui) back(ctx app.Context) {
+	if u.skipPop {
+		u.skipPop = false
+		return
+	}
+	if !u.backGuard {
+		return
+	}
+	u.backGuard = false
+	switch {
+	case u.editing:
+		u.setEditing(ctx, false)
+	case u.current != "":
+		u.open("")
+	}
+	u.syncBack()
 }
 
 // setEditing switches the open note between view and edit mode.
 func (u *ui) setEditing(ctx app.Context, on bool) {
 	u.editing = on
+	u.syncBack()
 	if on {
 		ctx.Defer(func(app.Context) { app.Window().GetElementByID("body").Call("focus") })
 	}
@@ -765,7 +807,7 @@ func (u *ui) create(space, title string) {
 	u.expand(space)
 	u.changed(n.ID)
 	u.open(n.ID)
-	u.editing = true
+	u.editing = true // open guarded the history already
 	focus := "body"
 	if title == "" {
 		focus = "title"

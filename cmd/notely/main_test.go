@@ -12,7 +12,8 @@ func TestWithBase(t *testing.T) {
 	echo := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte(r.URL.Path)) })
 	for _, tc := range []struct{ base, path, want string }{
 		{"", "/web/app.css", "/web/app.css"},
-		{"/notely", "/notely", "/"},
+		{"/notely", "/notely", "301 /notely/"},
+		{"/notely", "/notely?x=1", "301 /notely/?x=1"},
 		{"/notely", "/notely/", "/"},
 		{"/notely", "/notely/api/notes", "/api/notes"},
 		{"/notely", "/notelyx", "404"},
@@ -21,8 +22,11 @@ func TestWithBase(t *testing.T) {
 		w := httptest.NewRecorder()
 		withBase(tc.base, echo).ServeHTTP(w, httptest.NewRequest(http.MethodGet, tc.path, nil))
 		got := w.Body.String()
-		if w.Code == http.StatusNotFound {
+		switch w.Code {
+		case http.StatusNotFound:
 			got = "404"
+		case http.StatusMovedPermanently:
+			got = "301 " + w.Header().Get("Location")
 		}
 		if got != tc.want {
 			t.Errorf("base %q, path %q: got %q, want %q", tc.base, tc.path, got, tc.want)
@@ -38,7 +42,7 @@ func TestRoutes(t *testing.T) {
 		{"", "/", "pwa /"},
 		{"", "/api/notes", "api /api/notes"},
 		{"", "/healthz", "api /healthz"},
-		{"/notely", "/notely", "pwa /"},
+		{"/notely", "/notely/", "pwa /"},
 		{"/notely", "/notely/api/notes", "api /api/notes"},
 		{"/notely", "/notely/healthz", "api /healthz"},
 		{"/notely", "/healthz", "api /healthz"},
