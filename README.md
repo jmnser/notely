@@ -42,7 +42,7 @@ mkdir -p /data/notely ~/.config/containers/systemd
 cat > ~/.config/containers/systemd/notely.container <<'UNIT'
 [Container]
 ContainerName=notely
-Image=docker.io/<user>/notely:v0.2.1
+Image=docker.io/<user>/notely:<latest release tag>
 UserNS=keep-id:uid=65532,gid=65532
 Volume=/data/notely:/data
 PublishPort=127.0.0.1:8000:8000
