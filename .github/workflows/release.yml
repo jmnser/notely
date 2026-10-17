@@ -23,7 +23,7 @@ jobs:
         id: tag
         run: |
           svu="go run github.com/caarlos0/svu/v3@v3.4.1"
-          next=$($svu next)
+          next=$($svu next --v0) # breaking changes stay on v0.x
           [ "$next" = "$($svu current)" ] && exit 0
           git tag "$next"
           git push origin "$next"
