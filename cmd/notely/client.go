@@ -85,7 +85,7 @@ func call(method, path string, in, out any) error {
 		init["body"] = string(body)
 		init["headers"] = map[string]any{"Content-Type": "application/json"}
 	}
-	res, err := await(app.Window().Call("fetch", app.Getenv("GOAPP_ROOT_PREFIX")+path, init))
+	res, err := await(app.Window().Call("fetch", strings.TrimSuffix(app.Getenv("GOAPP_ROOT_PREFIX"), "/")+path, init))
 	if err != nil {
 		return fmt.Errorf("%s %s: %w", method, path, err)
 	}

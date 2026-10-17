@@ -73,6 +73,8 @@ type ui struct {
 	retries   bool // a retry of a failed sync is scheduled
 	syncGen   int  // bumped on sign-out, so results of older syncs are dropped
 	update    bool // a new app version is available
+	backDepth int  // history entries pushed for in-app back steps, see syncBack
+	skipPop   int  // popstate events caused by syncBack itself
 }
 
 func init() {
@@ -103,6 +105,15 @@ func (u *ui) OnMount(ctx app.Context) {
 		u.dirty[id] = 0
 	}
 
+	if depth := app.Window().Get("history").Get("state"); depth.Truthy() && depth.Get(backStateKey).Truthy() {
+		// A reload left the entries of the previous run; go back to the app's own.
+		u.skipPop++
+		app.Window().Get("history").Call("go", -depth.Get(backStateKey).Int())
+	}
+	app.Window().Call("addEventListener", "popstate", app.FuncOf(func(app.Value, []app.Value) any {
+		ctx.Dispatch(u.back)
+		return nil
+	}))
 	for _, event := range []string{"online", "focus"} {
 		app.Window().Call("addEventListener", event, app.FuncOf(func(app.Value, []app.Value) any {
 			ctx.Dispatch(u.sync)
@@ -689,13 +700,57 @@ func (u *ui) open(id string) {
 		u.editing = false
 	}
 	u.current = id
+	u.syncBack()
 	app.Window().GetElementByID("title").Set("value", n.Title)
 	app.Window().GetElementByID("body").Set("value", n.Body)
+}
+
+// backStateKey marks history entries pushed by syncBack with their depth.
+const backStateKey = "notelyBack"
+
+// syncBack keeps one history entry per in-app back step (an open note, edit
+// mode), so the back gesture steps back instead of leaving the app. Entries
+// are only pushed on user actions; Chrome skips entries pushed without one.
+func (u *ui) syncBack() {
+	want := 0
+	if u.current != "" {
+		want++
+	}
+	if u.editing {
+		want++
+	}
+	history := app.Window().Get("history")
+	for ; u.backDepth < want; u.backDepth++ {
+		history.Call("pushState", map[string]any{backStateKey: u.backDepth + 1}, "", app.Window().Get("location").Get("href"))
+	}
+	if n := u.backDepth - want; n > 0 {
+		u.backDepth, u.skipPop = want, u.skipPop+1
+		history.Call("go", -n)
+	}
+}
+
+// back handles the back gesture: edit mode goes to view mode, an open note
+// closes.
+func (u *ui) back(ctx app.Context) {
+	if u.skipPop > 0 {
+		u.skipPop--
+		return
+	}
+	if u.backDepth == 0 {
+		return
+	}
+	u.backDepth--
+	if u.editing {
+		u.setEditing(ctx, false)
+	} else {
+		u.open("")
+	}
 }
 
 // setEditing switches the open note between view and edit mode.
 func (u *ui) setEditing(ctx app.Context, on bool) {
 	u.editing = on
+	u.syncBack()
 	if on {
 		ctx.Defer(func(app.Context) { app.Window().GetElementByID("body").Call("focus") })
 	}
@@ -766,6 +821,7 @@ func (u *ui) create(space, title string) {
 	u.changed(n.ID)
 	u.open(n.ID)
 	u.editing = true
+	u.syncBack()
 	focus := "body"
 	if title == "" {
 		focus = "title"
