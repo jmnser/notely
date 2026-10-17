@@ -4,5 +4,5 @@
 !go.sum
 !cmd/
 !internal/
-cmd/notely-web/web/app.wasm
+cmd/notely/web/app.wasm
 **/*_test.go

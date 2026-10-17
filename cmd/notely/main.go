@@ -1,21 +1,26 @@
 //go:build !wasm
 
-// Command notely-web serves the notely PWA and proxies /api/ to the backend.
+// Command notely serves the notely PWA and its API. Only this file and others
+// built with !wasm may import internal/api, so it stays out of the browser.
 package main
 
 import (
+	"bufio"
+	"context"
 	"embed"
 	"flag"
+	"fmt"
 	"io/fs"
 	"log"
 	"net/http"
-	"net/http/httputil"
-	"net/url"
+	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/maxence-charriere/go-app/v10/pkg/app"
 
+	"github.com/jmnser/notely/internal/api"
 	"github.com/jmnser/notely/internal/serve"
 )
 
@@ -27,33 +32,44 @@ var version string
 
 func main() {
 	addr := flag.String("addr", "localhost:8000", "listen address")
-	api := flag.String("api", "http://localhost:8001", "backend URL")
+	data := flag.String("data", "notes", "notes directory")
+	usersFile := flag.String("users", "",
+		"users file, created with the default user if missing (default <data>/.users.json)")
+	interval := flag.Duration("sync-interval", time.Hour, "git backup interval; 0 syncs on request only")
 	base := flag.String("base", "", "path prefix the app is served under, e.g. /notely")
+	hash := flag.Bool("hash", false, "read a password from stdin, print its argon2id hash and exit")
 	flag.Parse()
+
+	if *hash {
+		password, err := bufio.NewReader(os.Stdin).ReadString('\n')
+		if password = strings.TrimRight(password, "\r\n"); password == "" {
+			log.Fatal("no password: ", err)
+		}
+		fmt.Println(api.HashPassword(password))
+		return
+	}
 	if *base = strings.Trim(*base, "/"); *base != "" {
 		*base = "/" + *base
 	}
 
-	target, err := url.Parse(*api)
-	if err != nil {
-		log.Fatal(err)
-	}
 	wasm, err := fs.Stat(web, "web/app.wasm")
 	if err != nil {
 		log.Fatal("frontend is not embedded, build with: task build")
 	}
+	srv, err := api.Open(*data, *usersFile)
+	if err != nil {
+		log.Fatal(err)
+	}
+	ctx, stop := context.WithCancel(context.Background())
+	synced := make(chan struct{})
+	go func() {
+		srv.RunSync(ctx, *interval)
+		close(synced)
+	}()
 
 	mux := http.NewServeMux()
-	mux.Handle("/api/", &httputil.ReverseProxy{Rewrite: func(r *httputil.ProxyRequest) {
-		r.SetURL(target)
-		// Lets the backend mark cookies Secure behind HTTPS, also when TLS ends
-		// at a proxy in front. A forged "https" only makes cookies stricter.
-		r.SetXForwarded()
-		if r.In.Header.Get("X-Forwarded-Proto") == "https" {
-			r.Out.Header.Set("X-Forwarded-Proto", "https")
-		}
-		r.Out.Host = r.In.Host // keeps the backend's same-origin check valid
-	}})
+	mux.Handle("/api/", srv)
+	mux.Handle("GET /healthz", srv)
 	mux.Handle("/web/", &gzipFiles{fsys: web, next: http.FileServerFS(web)})
 	mux.Handle("/", &app.Handler{
 		Name:               "notely",
@@ -73,7 +89,10 @@ func main() {
 		Version:           version,
 		Resources:         app.PrefixedLocation(*base),
 	})
-	if err := serve.Run(*addr, http.NewCrossOriginProtection().Handler(withBase(*base, mux))); err != nil {
+	err = serve.Run(*addr, http.NewCrossOriginProtection().Handler(withBase(*base, mux)))
+	stop()
+	<-synced // pushes the last changes
+	if err != nil {
 		log.Fatal(err)
 	}
 }

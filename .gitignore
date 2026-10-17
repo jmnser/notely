@@ -1,6 +1,6 @@
 /bin/
 /dist/
-/cmd/notely-web/web/app.wasm
+/cmd/notely/web/app.wasm
 notes.json*
 /notes/
 /.claude/worktrees/

@@ -41,6 +41,16 @@ jobs:
         with:
           go-version-file: go.mod
       - run: go test ./...
+      - name: Keep the backend and the size out of the wasm
+        env: {GOOS: js, GOARCH: wasm, MAX_BYTES: '11000000'}
+        run: |
+          if go list -deps ./cmd/notely | grep -x github.com/jmnser/notely/internal/api; then
+            echo "::error::the wasm imports internal/api"; exit 1
+          fi
+          go build -ldflags "-s -w" -o app.wasm ./cmd/notely
+          size=$(stat -c %s app.wasm)
+          echo "app.wasm: $size bytes (max $MAX_BYTES)"
+          [ "$size" -le "$MAX_BYTES" ] || { echo "::error::app.wasm is larger than $MAX_BYTES bytes"; exit 1; }
       - name: Race detector (needs cgo; test only)
         run: go test -race ./...
         env:
