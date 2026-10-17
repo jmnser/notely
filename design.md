@@ -17,7 +17,7 @@ browser (PWA, wasm) ──► notely ──► notes/*.md
 Imported only by files built with `!wasm`, so none of it reaches the browser; CI fails if the wasm imports it or grows beyond 11 MB.
 
 
-- API: `GET /api/notes`, `PUT /api/notes/{id}` (create or replace), `DELETE /api/notes/{id}`, `GET /healthz`; sign-on: `POST /api/login`, `POST /api/logout`, `GET /api/session`.
+- API: `GET /api/notes`, `PUT /api/notes/{id}` (create or replace), `DELETE /api/notes/{id}`, `GET /healthz` (also outside `-base`); sign-on: `POST /api/login`, `POST /api/logout`, `GET /api/session`.
 - Both writes are idempotent, so the frontend can safely retry them.
 - Notes live in memory; each one is also a Markdown file, written atomically (temp file + rename) on every change. A failed write leaves the note unchanged.
 

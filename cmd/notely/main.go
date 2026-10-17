@@ -67,11 +67,7 @@ func main() {
 		close(synced)
 	}()
 
-	mux := http.NewServeMux()
-	mux.Handle("/api/", srv)
-	mux.Handle("GET /healthz", srv)
-	mux.Handle("/web/", &gzipFiles{fsys: web, next: http.FileServerFS(web)})
-	mux.Handle("/", &app.Handler{
+	err = serve.Run(*addr, routes(*base, srv, &app.Handler{
 		Name:               "notely",
 		Title:              "notely",
 		Description:        "Offline-first Markdown notes",
@@ -88,13 +84,26 @@ func main() {
 		WasmContentLength: strconv.FormatInt(wasm.Size(), 10), // the response may be gzip-compressed
 		Version:           version,
 		Resources:         app.PrefixedLocation(*base),
-	})
-	err = serve.Run(*addr, http.NewCrossOriginProtection().Handler(withBase(*base, mux)))
+	}))
 	stop()
 	<-synced // pushes the last changes
 	if err != nil {
 		log.Fatal(err)
 	}
+}
+
+// routes serves the API, the embedded files and the PWA under base. /healthz
+// also answers without base, for probes that bypass the proxy in front.
+func routes(base string, backend, pwa http.Handler) http.Handler {
+	mux := http.NewServeMux()
+	mux.Handle("/api/", backend)
+	mux.Handle("GET /healthz", backend)
+	mux.Handle("/web/", &gzipFiles{fsys: web, next: http.FileServerFS(web)})
+	mux.Handle("/", pwa)
+	root := http.NewServeMux()
+	root.Handle("GET /healthz", backend)
+	root.Handle("/", withBase(base, mux))
+	return http.NewCrossOriginProtection().Handler(root)
 }
 
 // withBase serves h under the path prefix base, which itself is the app's

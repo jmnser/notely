@@ -29,6 +29,10 @@ docker run -d --name notely -p 8000:8000 -v notely:/data notely:v1.2.3
 
 Releases push it for `linux/amd64` and `linux/arm64` to `docker.io/<DOCKERHUB_USERNAME>/notely`, tagged with the version and `latest`. The release workflow needs the repository variable `DOCKERHUB_USERNAME` and the secret `DOCKERHUB_TOKEN`, a Docker Hub access token with read and write access.
 
+## Upgrading from notely-api and notely-web
+
+Since v0.2.0 one `notely` binary and image replace both. Stop and remove the `notely-api` and `notely-web` units and `notely.network`, then set up `notely.container` below with the same data directory; its layout is unchanged. The `-api` flag is gone and `/healthz` moved to port 8000.
+
 ## Podman, systemd and Tailscale Funnel
 
 Run notely as a rootless Quadlet service at `https://<host>.<tailnet>.ts.net/notely`. Replace `<user>` with the Docker Hub user, then:
