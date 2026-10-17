@@ -7,45 +7,30 @@ env:
 tasks:
   wasm:
     desc: Build the frontend
-    sources: [go.mod, go.sum, cmd/notely-web/*.go, internal/**/*.go]
-    generates: [cmd/notely-web/web/app.wasm]
+    sources: [go.mod, go.sum, cmd/notely/*.go, internal/**/*.go]
+    generates: [cmd/notely/web/app.wasm]
     env: {GOOS: js, GOARCH: wasm}
-    cmd: go build -ldflags "-s -w" -o cmd/notely-web/web/app.wasm ./cmd/notely-web
+    cmd: go build -ldflags "-s -w" -o cmd/notely/web/app.wasm ./cmd/notely
 
   build:
-    desc: Build both binaries into bin/
+    desc: Build bin/notely
     deps: [wasm]
     cmd: go build -o bin/ ./cmd/...
 
   run:
-    desc: Run backend and frontend locally on http://localhost:8000
-    cmds:
-      - task: build
-      - task: serve
-
-  serve:
-    internal: true
-    deps: [serve:api, serve:web]
-
-  serve:api:
-    internal: true
-    cmd: ./bin/notely-api
-
-  serve:web:
-    internal: true
-    cmd: ./bin/notely-web
+    desc: Run notely locally on http://localhost:8000
+    deps: [build]
+    cmd: ./bin/notely
 
   image:
-    desc: Build the notely-api and notely-web container images, tagged with VERSION
+    desc: Build the notely container image, tagged with VERSION
     vars:
       REVISION:
         sh: git rev-parse HEAD
       TAG: '{{.VERSION | default (print "v0.0.0-" (trunc 7 .REVISION))}}'
-    cmds:
-      - for: [api, web]
-        cmd: >-
-          docker build --target {{.ITEM}} -t notely-{{.ITEM}}:{{.TAG}}
-          --build-arg VERSION={{.TAG}} --build-arg REVISION={{.REVISION}} .
+    cmd: >-
+      docker build -t notely:{{.TAG}}
+      --build-arg VERSION={{.TAG}} --build-arg REVISION={{.REVISION}} .
 
   test:
     desc: Run the tests
