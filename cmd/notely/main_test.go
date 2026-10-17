@@ -78,13 +78,13 @@ func TestRootResolver(t *testing.T) {
 func TestManifestID(t *testing.T) {
 	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/manifest+json")
-		_, _ = w.Write([]byte(`{"start_url":"/notely/"}`))
+		_, _ = w.Write([]byte(`{"start_url":"/notely/","theme_color":"#fff","background_color":"#fff"}`))
 	})
 	h := &manifestID{id: "/notely", next: next}
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/manifest.webmanifest", nil))
 	var m map[string]string
-	if err := json.Unmarshal(w.Body.Bytes(), &m); err != nil || m["id"] != "/notely" || m["start_url"] != "/notely/" {
+	if err := json.Unmarshal(w.Body.Bytes(), &m); err != nil || len(m) != 2 || m["id"] != "/notely" || m["start_url"] != "/notely/" {
 		t.Errorf("manifest = %s (%v)", w.Body, err)
 	}
 	if ct := w.Header().Get("Content-Type"); ct != "application/manifest+json" {
@@ -92,7 +92,7 @@ func TestManifestID(t *testing.T) {
 	}
 	w = httptest.NewRecorder()
 	h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/app.js", nil))
-	if w.Body.String() != `{"start_url":"/notely/"}` {
+	if w.Body.String() != `{"start_url":"/notely/","theme_color":"#fff","background_color":"#fff"}` {
 		t.Errorf("other paths changed: %s", w.Body)
 	}
 }

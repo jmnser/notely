@@ -125,7 +125,8 @@ func (r rootResolver) Resolve(location string) string {
 	return r.ResourceResolver.Resolve(location)
 }
 
-// manifestID adds id to the web app manifest. Without one, Chrome identifies
+// manifestID adds id to the web app manifest and drops its fixed colors.
+// Without an id, Chrome identifies
 // an installed app by its start URL; the id keeps installs from before the
 // start URL gained its trailing slash the same app, so they update in place.
 type manifestID struct {
@@ -148,14 +149,17 @@ func (m *manifestID) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	manifest["id"] = m.id
+	// Android web apps color the navigation bar and splash from these, in both
+	// schemes; without them the system theme applies.
+	delete(manifest, "theme_color")
+	delete(manifest, "background_color")
 	maps.Copy(w.Header(), rec.Header())
 	w.Header().Del("Content-Length")
 	_ = json.NewEncoder(w).Encode(manifest)
 }
 
 // themeColorScript colors the browser and Android system bars like the app's
-// surface, following the light or dark color scheme. Manifest colors cannot
-// depend on the scheme.
+// surface, following the light or dark color scheme.
 const themeColorScript = `<script>
 (() => {
   const dark = matchMedia("(prefers-color-scheme: dark)");

@@ -27,7 +27,7 @@ task image VERSION=v1.2.3
 docker run -d --name notely -p 8000:8000 -v notely:/data notely:v1.2.3
 ```
 
-Releases push it for `linux/amd64` and `linux/arm64` to `docker.io/<DOCKERHUB_USERNAME>/notely`, tagged with the version and `latest`. The release workflow needs the repository variable `DOCKERHUB_USERNAME` and the secret `DOCKERHUB_TOKEN`, a Docker Hub access token with read and write access.
+Releases push it for `linux/amd64` and `linux/arm64` to `docker.io/<DOCKERHUB_USERNAME>/notely`, tagged with the version (tags are immutable, so there is no `latest`). The release workflow needs the repository variable `DOCKERHUB_USERNAME` and the secret `DOCKERHUB_TOKEN`, a Docker Hub access token with read and write access.
 
 ## Upgrading from notely-api and notely-web
 
@@ -42,7 +42,7 @@ mkdir -p /data/notely ~/.config/containers/systemd
 cat > ~/.config/containers/systemd/notely.container <<'UNIT'
 [Container]
 ContainerName=notely
-Image=docker.io/<user>/notely:latest
+Image=docker.io/<user>/notely:<latest release tag>
 UserNS=keep-id:uid=65532,gid=65532
 Volume=/data/notely:/data
 PublishPort=127.0.0.1:8000:8000
@@ -59,7 +59,7 @@ systemctl --user start notely
 tailscale funnel --bg --set-path=/notely http://127.0.0.1:8000/notely
 ```
 
-`UserNS=keep-id:uid=65532,gid=65532` maps your user to the image's user, so `/data/notely` stays yours. `-base=/notely` serves the app under that path. Check with `tailscale funnel status` and `journalctl --user -u notely`.
+`UserNS=keep-id:uid=65532,gid=65532` maps your user to the image's user, so `/data/notely` stays yours. `-base=/notely` serves the app under that path. Check with `tailscale funnel status` and `journalctl --user -u notely`. To update, change the tag in `Image=`, then run `systemctl --user daemon-reload && systemctl --user restart notely`.
 
 ## Sign-on
 
