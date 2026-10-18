@@ -77,7 +77,7 @@ func main() {
 		Description: "Offline-first Markdown notes",
 		// Android colors the navigation bar from the manifest theme color only,
 		// in both schemes; themeColorScript follows the scheme elsewhere.
-		ThemeColor:         "#211f26",
+		ThemeColor:         barColor,
 		BackgroundColor:    "#f3edf7",
 		CacheableResources: []string{"/web/mermaid/mermaid.min.js"}, // loaded on demand, kept for offline use
 		Icon: app.Icon{
@@ -141,7 +141,11 @@ func (r rootResolver) Resolve(location string) string {
 	return r.ResourceResolver.Resolve(location)
 }
 
-// manifestID adds id to the web app manifest. Without one, Chrome identifies
+// barColor is the dark surface, used for the Android system bars.
+const barColor = "#211f26"
+
+// manifestID adds id and the dark background_color to the web app manifest.
+// Without an id, Chrome identifies
 // an installed app by its start URL; the id keeps installs from before the
 // start URL gained its trailing slash the same app, so they update in place.
 type manifestID struct {
@@ -164,6 +168,10 @@ func (m *manifestID) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	manifest["id"] = m.id
+	// Android 15+ ignores the navigation bar color and shows the window
+	// background, which Chrome takes from background_color. The page keeps
+	// the light BackgroundColor, so light mode does not flash dark on load.
+	manifest["background_color"] = barColor
 	w.Header().Del("Content-Length")
 	_ = json.NewEncoder(w).Encode(manifest)
 }
