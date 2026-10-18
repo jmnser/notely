@@ -72,8 +72,8 @@ func main() {
 	}()
 
 	err = serve.Run(*addr, routes(*base, srv, &manifestID{id: cmp.Or(*base, "/"), next: &app.Handler{
-		Name:        "notely",
-		Title:       "notely",
+		Name:        "Notely",
+		Title:       "Notely",
 		Description: "Offline-first Markdown notes",
 		// Android colors the navigation bar from the manifest theme color only,
 		// in both schemes; themeColorScript follows the scheme elsewhere.

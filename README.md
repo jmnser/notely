@@ -1,4 +1,4 @@
-# notely
+# Notely
 
 Offline-first Markdown notes, organised in spaces. See [design.md](design.md).
 
@@ -35,7 +35,7 @@ Since v0.2.0 one `notely` binary and image replace both. Stop and remove the `no
 
 ## Podman, systemd and Tailscale Funnel
 
-Run notely as a rootless Quadlet service at `https://<host>.<tailnet>.ts.net/notely`. Replace `<user>` with the Docker Hub user, then:
+Run Notely as a rootless Quadlet service at `https://<host>.<tailnet>.ts.net/notely`. Replace `<user>` with the Docker Hub user, then:
 
 ```sh
 mkdir -p /data/notely ~/.config/containers/systemd
