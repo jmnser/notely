@@ -8,7 +8,7 @@ import (
 const list = "# Todo\n\n- [ ] one\n- [x] two\n\n```\n- [ ] in code\n```\n\n1. [X] three\n   - [ ] nested\n"
 
 func TestRender(t *testing.T) {
-	got := render(list)
+	got := render(list, "")
 	for _, want := range []string{
 		`<div class="markdown">`,
 		`<input type="checkbox" data-task="0">`,
@@ -24,7 +24,7 @@ func TestRender(t *testing.T) {
 	if strings.Contains(got, "disabled") || strings.Contains(got, `data-task="4"`) {
 		t.Errorf("render() = %s", got)
 	}
-	if got := render(`<script>x</script>`); strings.Contains(got, "<script>") {
+	if got := render(`<script>x</script>`, ""); strings.Contains(got, "<script>") {
 		t.Errorf("render() keeps raw HTML: %s", got)
 	}
 }
@@ -50,7 +50,7 @@ func TestToggle(t *testing.T) {
 }
 
 func TestRenderMermaid(t *testing.T) {
-	got := render("```mermaid\ngraph TD\n  A-->B[\"<b>x</b>\"]\n```\n\n```go\nx\n```\n")
+	got := render("```mermaid\ngraph TD\n  A-->B[\"<b>x</b>\"]\n```\n\n```go\nx\n```\n", "")
 	want := `<pre class="mermaid">graph TD
   A--&gt;B[&quot;&lt;b&gt;x&lt;/b&gt;&quot;]
 </pre>`
@@ -59,5 +59,28 @@ func TestRenderMermaid(t *testing.T) {
 	}
 	if !strings.Contains(got, `<pre><code class="language-go">`) {
 		t.Errorf("render() changed other code blocks: %s", got)
+	}
+}
+
+func TestRenderImages(t *testing.T) {
+	got := render("![cat](/images/0123456789abcdef0123456789abcdef.png)\n\n![web](https://example.com/a.png)", "/notely")
+	for _, want := range []string{
+		`<img loading="lazy" src="/notely/api/images/0123456789abcdef0123456789abcdef.png" alt="cat">`,
+		`<img src="https://example.com/a.png" alt="web">`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("render() lacks %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestImageMarkdown(t *testing.T) {
+	for file, want := range map[string]string{
+		"cat.png":      "![cat](/images/x.png)\n",
+		"a [b]\\c.jpg": "![a bc](/images/x.png)\n",
+	} {
+		if got := imageMarkdown(file, "/images/x.png"); got != want {
+			t.Errorf("imageMarkdown(%q) = %q, want %q", file, got, want)
+		}
 	}
 }
