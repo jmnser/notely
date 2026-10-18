@@ -1,6 +1,6 @@
 # Design
 
-notely is a small multi-user, offline-first note taking app in one binary.
+Notely is a small multi-user, offline-first note taking app in one binary.
 
 ```
 browser (PWA, wasm) ──► notely ──► notes/*.md
