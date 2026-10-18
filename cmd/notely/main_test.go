@@ -84,7 +84,7 @@ func TestManifestID(t *testing.T) {
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/manifest.webmanifest", nil))
 	var m map[string]string
-	if err := json.Unmarshal(w.Body.Bytes(), &m); err != nil || len(m) != 2 || m["id"] != "/notely" || m["start_url"] != "/notely/" {
+	if err := json.Unmarshal(w.Body.Bytes(), &m); err != nil || m["theme_color"] != "#fff" || m["id"] != "/notely" || m["start_url"] != "/notely/" {
 		t.Errorf("manifest = %s (%v)", w.Body, err)
 	}
 	if ct := w.Header().Get("Content-Type"); ct != "application/manifest+json" {

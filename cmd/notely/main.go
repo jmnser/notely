@@ -72,10 +72,12 @@ func main() {
 	}()
 
 	err = serve.Run(*addr, routes(*base, srv, &manifestID{id: cmp.Or(*base, "/"), next: &app.Handler{
-		Name:               "notely",
-		Title:              "notely",
-		Description:        "Offline-first Markdown notes",
-		ThemeColor:         "#f3edf7",
+		Name:        "notely",
+		Title:       "notely",
+		Description: "Offline-first Markdown notes",
+		// Android colors the navigation bar from the manifest theme color only,
+		// in both schemes; themeColorScript follows the scheme elsewhere.
+		ThemeColor:         "#211f26",
 		BackgroundColor:    "#f3edf7",
 		CacheableResources: []string{"/web/mermaid/mermaid.min.js"}, // loaded on demand, kept for offline use
 		Icon: app.Icon{
@@ -125,8 +127,7 @@ func (r rootResolver) Resolve(location string) string {
 	return r.ResourceResolver.Resolve(location)
 }
 
-// manifestID adds id to the web app manifest and drops its fixed colors.
-// Without an id, Chrome identifies
+// manifestID adds id to the web app manifest. Without one, Chrome identifies
 // an installed app by its start URL; the id keeps installs from before the
 // start URL gained its trailing slash the same app, so they update in place.
 type manifestID struct {
@@ -149,10 +150,6 @@ func (m *manifestID) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	manifest["id"] = m.id
-	// Android web apps color the navigation bar and splash from these, in both
-	// schemes; without them the system theme applies.
-	delete(manifest, "theme_color")
-	delete(manifest, "background_color")
 	maps.Copy(w.Header(), rec.Header())
 	w.Header().Del("Content-Length")
 	_ = json.NewEncoder(w).Encode(manifest)

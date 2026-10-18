@@ -292,6 +292,11 @@ button {
   gap: 4px;
   margin-top: auto;
 }
+.version {
+  padding: 0 16px 8px;
+  font-size: 11px;
+  color: var(--md-on-surface-variant);
+}
 .drawer-toggle {
   display: flex;
   flex: 1;
@@ -316,7 +321,7 @@ button {
   .app.drawer-hidden .drawer {
     align-items: center;
   }
-  .app.drawer-hidden :is(.search, .tree, .drawer-toggle span) {
+  .app.drawer-hidden :is(.search, .tree, .drawer-toggle span, .version) {
     display: none;
   }
   .app.drawer-hidden .drawer-bottom {
