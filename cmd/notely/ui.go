@@ -196,6 +196,7 @@ func (u *ui) Render() app.UI {
 				iconButton("cloud_upload", "Git backup").OnClick(u.openBackup),
 				iconButton("logout", "Sign out").OnClick(u.signOut),
 			),
+			app.Div().Class("version").Text("notely "+app.Getenv("GOAPP_VERSION")),
 		),
 		app.Main().Body(
 			app.Div().Class("empty").Body(
