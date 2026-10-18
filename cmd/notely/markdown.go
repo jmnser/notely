@@ -18,6 +18,7 @@ var md = goldmark.New(goldmark.WithExtensions(extension.GFM))
 const (
 	checkbox     = ` disabled="" type="checkbox"`
 	imageSrc     = `<img src="/images/`
+	imageHref    = `<a href="/images/`
 	mermaidStart = `<pre><code class="language-mermaid">`
 	mermaidEnd   = `</code></pre>`
 )
@@ -33,7 +34,10 @@ func render(src, prefix string) string {
 	}
 	var out strings.Builder
 	out.WriteString(`<div class="markdown">`)
-	html := strings.ReplaceAll(buf.String(), imageSrc, `<img loading="lazy" src="`+prefix+`/api/images/`)
+	html := strings.NewReplacer(
+		imageSrc, `<img loading="lazy" src="`+prefix+`/api/images/`,
+		imageHref, `<a href="`+prefix+`/api/images/`,
+	).Replace(buf.String())
 	rest := mermaidBlocks(html)
 	for i := 0; ; i++ {
 		before, after, ok := strings.Cut(rest, checkbox)

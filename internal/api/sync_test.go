@@ -65,7 +65,8 @@ func TestSync(t *testing.T) {
 	writeNote(t, notes, "work/Plan.md", "b")
 	writeNote(t, notes, ".users.json", "secret")
 	writeNote(t, notes, ".images/0123456789abcdef0123456789abcdef.png", "png")
-	writeNote(t, notes, ".images/.0123456789abcdef0123456789abcdef.png.tmp", "partial")
+	writeNote(t, notes, ".images/.0123456789abcdef0123456789abcdef.png.ABC.tmp", "partial")
+	writeNote(t, notes, ".images/sub/x.md", "nested")
 	if err := os.Symlink("/etc/hosts", filepath.Join(notes, "leak.md")); err != nil {
 		t.Fatal(err)
 	}

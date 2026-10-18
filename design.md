@@ -72,7 +72,7 @@ updated: 2026-10-15T09:12:00.123Z
 ### Images
 
 - `POST /api/images` stores a PNG, JPEG, GIF or WebP image of up to 10 MiB as `<data>/.images/<hash>.<ext>`, named after the first 128 bits of its SHA-256, and answers `{"path": "/images/<name>"}`. The type comes from the content, not the request; SVG is refused because it can carry scripts. The same image is stored once.
-- Notes reference it as `![alt](/images/<name>)`. The app loads it from `GET /api/images/<name>` (signed on, cached as immutable, `sandbox` CSP); the git backup copies `.images/` to `images/`, where GitHub resolves the same root-relative link.
+- Notes reference it as `![alt](/images/<name>)`. The app loads it from `GET /api/images/<name>` (signed on, cached as immutable, `sandbox` CSP); the git backup copies `.images/` to `images/`, where GitHub resolves the same root-relative link. Links `[text](/images/<name>)` work the same.
 - In edit mode the image button or pasting an image uploads it and inserts the Markdown at the cursor.
 
 ## Frontend: `cmd/notely`
@@ -152,7 +152,7 @@ Material Design 3 is implemented in plain CSS (`web/app.css`: M3 color, type, sh
 ## Limitations
 
 - Users share one set of notes; there are no per-user notes or permissions.
-- Images need the backend: uploading needs a connection, and images not yet loaded do not show offline. Images no note references are kept.
+- Images need the backend: uploading needs a connection, and images not yet loaded do not show offline. Images no note references are kept. Images are stored as uploaded, including metadata such as a photo's GPS location, and go into the git backup.
 - Sessions and the last git backup results are lost on backend restart.
 - Git backup is one-way; edits made in the repository are not imported.
 - Run behind HTTPS beyond localhost: over plain HTTP the session cookie and password travel unencrypted.

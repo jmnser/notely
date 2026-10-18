@@ -13,7 +13,10 @@ import (
 	"time"
 )
 
-const maxImage = 10 << 20
+const (
+	maxImage = 10 << 20
+	imageDir = ".images" // under the notes directory; dot files are not notes
+)
 
 // imageTypes maps the image types accepted for upload to their file
 // extension. SVG is left out: it can carry scripts.
@@ -50,6 +53,8 @@ func (im *images) handler() http.Handler {
 }
 
 func (im *images) upload(w http.ResponseWriter, r *http.Request) {
+	// The server's read timeout is too short for 10 MiB over a slow phone link.
+	_ = http.NewResponseController(w).SetReadDeadline(time.Now().Add(2 * time.Minute))
 	data, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxImage))
 	if _, ok := errors.AsType[*http.MaxBytesError](err); ok {
 		http.Error(w, "image larger than 10 MiB", http.StatusBadRequest)

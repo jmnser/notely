@@ -249,7 +249,9 @@ func (u *ui) Render() app.UI {
 					}
 				}).
 				OnPaste(func(_ app.Context, e app.Event) {
-					if files := e.Get("clipboardData").Get("files"); files.Length() > 0 {
+					// Office apps put a picture of pasted text next to the text.
+					data := e.Get("clipboardData")
+					if files := data.Get("files"); files.Length() > 0 && !data.Get("types").Call("includes", "text/plain").Bool() {
 						e.PreventDefault()
 						u.insertImages(files)
 					}
@@ -813,21 +815,31 @@ func (u *ui) newline(ctx app.Context, e app.Event) {
 	u.edit(func(n *note.Note) { n.Body = v })
 }
 
-// imageAccept lists the image types the backend stores.
-const imageAccept = "image/png,image/jpeg,image/gif,image/webp"
+// imageAccept and maxImage are the image types and size the backend stores.
+const (
+	imageAccept = "image/png,image/jpeg,image/gif,image/webp"
+	maxImage    = 10 << 20
+)
 
 // insertImages uploads image files (a JavaScript FileList) and inserts a
 // Markdown image for each at the editor's cursor, in order.
 func (u *ui) insertImages(files app.Value) {
 	var list []app.Value
 	for i := range files.Length() {
-		if f := files.Index(i); slices.Contains(strings.Split(imageAccept, ","), f.Get("type").String()) {
-			list = append(list, f)
+		f := files.Index(i)
+		if !slices.Contains(strings.Split(imageAccept, ","), f.Get("type").String()) {
+			u.status = "Use a PNG, JPEG, GIF or WebP image."
+			u.ctx.Update()
+			return
 		}
+		if f.Get("size").Int() > maxImage {
+			u.status = "Images can be up to 10 MiB."
+			u.ctx.Update()
+			return
+		}
+		list = append(list, f)
 	}
 	if len(list) == 0 {
-		u.status = "Use a PNG, JPEG, GIF or WebP image."
-		u.ctx.Update()
 		return
 	}
 	id := u.current

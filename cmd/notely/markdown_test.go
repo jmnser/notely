@@ -63,8 +63,10 @@ func TestRenderMermaid(t *testing.T) {
 }
 
 func TestRenderImages(t *testing.T) {
-	got := render("![cat](/images/0123456789abcdef0123456789abcdef.png)\n\n![web](https://example.com/a.png)", "/notely")
+	got := render("![cat](/images/0123456789abcdef0123456789abcdef.png)\n\n![web](https://example.com/a.png)\n\n"+
+		"[full](/images/0123456789abcdef0123456789abcdef.png)", "/notely")
 	for _, want := range []string{
+		`<a href="/notely/api/images/0123456789abcdef0123456789abcdef.png">full</a>`,
 		`<img loading="lazy" src="/notely/api/images/0123456789abcdef0123456789abcdef.png" alt="cat">`,
 		`<img src="https://example.com/a.png" alt="web">`,
 	} {

@@ -3,6 +3,7 @@ package api
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -372,8 +373,10 @@ func mirror(src, dst string) error {
 		switch {
 		case err != nil:
 			return err
-		case rel == ".images" && d.IsDir():
+		case rel == imageDir && d.IsDir():
 			return nil
+		case d.IsDir() && path.Dir(rel) == imageDir:
+			return fs.SkipDir
 		case rel != "." && strings.HasPrefix(d.Name(), "."):
 			if d.IsDir() {
 				return fs.SkipDir
@@ -381,7 +384,7 @@ func mirror(src, dst string) error {
 			return nil
 		case !d.Type().IsRegular():
 			return nil
-		case path.Dir(rel) == ".images":
+		case path.Dir(rel) == imageDir:
 			if !imageName.MatchString(d.Name()) {
 				return nil
 			}
@@ -390,6 +393,11 @@ func mirror(src, dst string) error {
 			return nil
 		}
 		files[out] = true
+		if out != rel {
+			if _, err := to.Stat(out); err == nil {
+				return nil // an image's name is its content
+			}
+		}
 		data, err := from.ReadFile(rel)
 		if err != nil {
 			return err
@@ -502,9 +510,11 @@ func host(remote string) string {
 	return strings.ToLower(u.Host)
 }
 
-// writeFile replaces name in root atomically, readable by the owner only.
+// writeFile replaces name in root atomically, readable by the owner only. The
+// temporary file is a dot file with a random name, so concurrent writes of
+// the same name do not mix.
 func writeFile(root *os.Root, name string, data []byte) error {
-	tmp := name + ".tmp"
+	tmp := path.Join(path.Dir(name), "."+path.Base(name)+"."+rand.Text()+".tmp")
 	if err := root.WriteFile(tmp, data, 0o600); err != nil {
 		_ = root.Remove(tmp)
 		return err
