@@ -37,6 +37,9 @@ func Open(dir, usersFile string) (*Server, error) {
 	mux, sh := http.NewServeMux(), sy.handler()
 	mux.Handle("/api/sync", sh)
 	mux.Handle("/api/sync/", sh)
+	ih := (&images{dir: filepath.Join(dir, imageDir)}).handler()
+	mux.Handle("/api/images", ih)
+	mux.Handle("/api/images/", ih)
 	mux.Handle("/", newHandler(s))
 	return &Server{Handler: newAuth(users).handler(mux), sync: sy}, nil
 }

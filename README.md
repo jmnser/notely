@@ -71,6 +71,10 @@ echo -n 'new password' | notely -hash
 
 Serve over HTTPS beyond localhost; see [design.md](design.md#sign-on).
 
+## Images
+
+In edit mode, the image button or pasting an image uploads it and inserts `![name](/images/<hash>.png)`. Images (PNG, JPEG, GIF, WebP, up to 10 MiB) live in `<data>/.images/` and are part of the git backup under `images/`.
+
 ## Git backup
 
 Each user can push the notes to their own repository every `-sync-interval` (default 1h): open **Git backup** at the bottom of the sidebar and enter the repository URL, branch and a token. For GitHub, create a fine-grained token for that repository only with _Contents: read and write_. The token is stored in `<data>/.sync/<user>/token` on the server, never in git. See [design.md](design.md#git-backup).

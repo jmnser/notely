@@ -17,6 +17,8 @@ var md = goldmark.New(goldmark.WithExtensions(extension.GFM))
 
 const (
 	checkbox     = ` disabled="" type="checkbox"`
+	imageSrc     = `<img src="/images/`
+	imageHref    = `<a href="/images/`
 	mermaidStart = `<pre><code class="language-mermaid">`
 	mermaidEnd   = `</code></pre>`
 )
@@ -24,14 +26,19 @@ const (
 // render converts markdown to HTML with a single root element. Task list
 // checkboxes are enabled and numbered in data-task, in document order.
 // Mermaid code blocks become <pre class="mermaid"> for Mermaid to draw.
-func render(src string) string {
+// Uploaded images, /images/<name>, load from the API under prefix.
+func render(src, prefix string) string {
 	var buf bytes.Buffer
 	if err := md.Convert([]byte(src), &buf); err != nil {
 		return "<div></div>"
 	}
 	var out strings.Builder
 	out.WriteString(`<div class="markdown">`)
-	rest := mermaidBlocks(buf.String())
+	html := strings.NewReplacer(
+		imageSrc, `<img loading="lazy" src="`+prefix+`/api/images/`,
+		imageHref, `<a href="`+prefix+`/api/images/`,
+	).Replace(buf.String())
+	rest := mermaidBlocks(html)
 	for i := 0; ; i++ {
 		before, after, ok := strings.Cut(rest, checkbox)
 		out.WriteString(before)

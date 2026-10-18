@@ -12,7 +12,10 @@ import (
 	"github.com/jmnser/notely/internal/note"
 )
 
-const timeout = 15 * time.Second // per backend request
+const (
+	timeout       = 15 * time.Second // per backend request
+	uploadTimeout = 2 * time.Minute  // per image upload
+)
 
 // HTTP methods, spelled out to keep net/http's client out of the wasm binary.
 const (
@@ -68,24 +71,45 @@ func exchange(push []note.Note, deleted []string) ([]note.Note, map[string]error
 	return notes, rejected, call(get, "/api/notes", nil, &notes)
 }
 
+// uploadImage stores an image file (a JavaScript Blob) on the backend and
+// returns its path for Markdown, /images/<name>.
+func uploadImage(file app.Value) (string, error) {
+	var out struct{ Path string }
+	err := send(post, "/api/images", file, file.Get("type").String(), uploadTimeout, &out)
+	return out.Path, err
+}
+
+// rootPrefix is the path the app is served under, without a trailing slash.
+func rootPrefix() string {
+	return strings.TrimSuffix(app.Getenv("GOAPP_ROOT_PREFIX"), "/")
+}
+
 // call sends a JSON request to the backend with the browser's fetch and
 // decodes the JSON response into out. It blocks: run it in Async. fetch,
 // unlike net/http, keeps Go's TLS stack out of the wasm binary.
 func call(method, path string, in, out any) error {
+	if in == nil {
+		return send(method, path, nil, "", timeout, out)
+	}
+	body, err := json.Marshal(in)
+	if err != nil {
+		return err
+	}
+	return send(method, path, string(body), "application/json", timeout, out)
+}
+
+// send fetches path with body, if not nil, and decodes the JSON response into out.
+func send(method, path string, body any, contentType string, limit time.Duration, out any) error {
 	init := map[string]any{
 		"method":      method,
 		"credentials": "same-origin",
-		"signal":      app.Window().Get("AbortSignal").Call("timeout", timeout.Milliseconds()),
+		"signal":      app.Window().Get("AbortSignal").Call("timeout", limit.Milliseconds()),
 	}
-	if in != nil {
-		body, err := json.Marshal(in)
-		if err != nil {
-			return err
-		}
-		init["body"] = string(body)
-		init["headers"] = map[string]any{"Content-Type": "application/json"}
+	if body != nil {
+		init["body"] = body
+		init["headers"] = map[string]any{"Content-Type": contentType}
 	}
-	res, err := await(app.Window().Call("fetch", strings.TrimSuffix(app.Getenv("GOAPP_ROOT_PREFIX"), "/")+path, init))
+	res, err := await(app.Window().Call("fetch", rootPrefix()+path, init))
 	if err != nil {
 		return fmt.Errorf("%s %s: %w", method, path, err)
 	}

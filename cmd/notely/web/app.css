@@ -803,3 +803,10 @@ dialog p {
     margin: 8px;
   }
 }
+
+/* Images in notes */
+.markdown img {
+  max-width: 100%;
+  height: auto;
+  border-radius: 12px;
+}

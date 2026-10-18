@@ -45,9 +45,11 @@ func TestOpen(t *testing.T) {
 		{"healthz", "GET", "/healthz", "", nil, http.StatusNoContent},
 		{"notes signed out", "GET", "/api/notes", "", nil, http.StatusUnauthorized},
 		{"sync signed out", "GET", "/api/sync", "", nil, http.StatusUnauthorized},
+		{"images signed out", "POST", "/api/images", "x", nil, http.StatusUnauthorized},
 		{"login", "POST", "/api/login", `{"user":"ann","password":"pw"}`, nil, http.StatusOK},
 		{"notes", "GET", "/api/notes", "", nil, http.StatusOK},
 		{"sync", "GET", "/api/sync", "", nil, http.StatusOK},
+		{"image", "POST", "/api/images", string(pngData(t)), nil, http.StatusOK},
 		{"put", "PUT", "/api/notes/a", `{"title":"a"}`, nil, http.StatusOK},
 		{"cross origin", "PUT", "/api/notes/a", "{}", []string{"Origin", "https://evil.example"}, http.StatusForbidden},
 	} {

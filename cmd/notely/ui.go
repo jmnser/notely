@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"errors"
 	"maps"
+	"path"
 	"slices"
 	"strconv"
 	"strings"
@@ -217,6 +218,9 @@ func (u *ui) Render() app.UI {
 							Body(icon("edit"), app.Span().Text("Edit")).
 							OnClick(func(ctx app.Context, _ app.Event) { u.setEditing(ctx, true) }),
 					),
+					iconButton("image", "Insert image").Hidden(!u.editing).OnClick(func(app.Context, app.Event) {
+						app.Window().GetElementByID("image-file").Call("click")
+					}),
 					iconButton("move", "Move to space").OnClick(u.move),
 					pinButton("Pin", cur != nil && cur.Pinned).
 						OnClick(func(app.Context, app.Event) { u.togglePin(u.current) }),
@@ -243,6 +247,19 @@ func (u *ui) Render() app.UI {
 					case "Enter":
 						u.newline(ctx, e)
 					}
+				}).
+				OnPaste(func(_ app.Context, e app.Event) {
+					// Office apps put a picture of pasted text next to the text.
+					data := e.Get("clipboardData")
+					if files := data.Get("files"); files.Length() > 0 && !data.Get("types").Call("includes", "text/plain").Bool() {
+						e.PreventDefault()
+						u.insertImages(files)
+					}
+				}),
+			app.Input().ID("image-file").Type("file").Accept(imageAccept).Multiple(true).Hidden(true).
+				OnChange(func(ctx app.Context, _ app.Event) {
+					u.insertImages(ctx.JSSrc().Get("files"))
+					ctx.JSSrc().Set("value", "") // the same file can be picked again
 				}),
 		),
 		app.Div().Class("snackbar").Hidden(u.status == "" && !u.update).Body(
@@ -683,7 +700,7 @@ func (u *ui) signOut(app.Context, app.Event) {
 // rendered returns src as HTML, rendering it only when it changed.
 func (u *ui) rendered(src string) string {
 	if u.html == "" || src != u.htmlSrc {
-		u.html, u.htmlSrc = render(src), src
+		u.html, u.htmlSrc = render(src, rootPrefix()), src
 	}
 	return u.html
 }
@@ -794,6 +811,86 @@ func (u *ui) newline(ctx app.Context, e app.Event) {
 	v = v[:from] + insert + v[to:]
 	el.Set("value", v)
 	c := utf16Offset(v, from+len(insert))
+	el.Call("setSelectionRange", c, c)
+	u.edit(func(n *note.Note) { n.Body = v })
+}
+
+// imageAccept and maxImage are the image types and size the backend stores.
+const (
+	imageAccept = "image/png,image/jpeg,image/gif,image/webp"
+	maxImage    = 10 << 20
+)
+
+// insertImages uploads image files (a JavaScript FileList) and inserts a
+// Markdown image for each at the editor's cursor, in order.
+func (u *ui) insertImages(files app.Value) {
+	var list []app.Value
+	for i := range files.Length() {
+		f := files.Index(i)
+		if !slices.Contains(strings.Split(imageAccept, ","), f.Get("type").String()) {
+			u.status = "Use a PNG, JPEG, GIF or WebP image."
+			u.ctx.Update()
+			return
+		}
+		if f.Get("size").Int() > maxImage {
+			u.status = "Images can be up to 10 MiB."
+			u.ctx.Update()
+			return
+		}
+		list = append(list, f)
+	}
+	if len(list) == 0 {
+		return
+	}
+	id := u.current
+	u.status = "Uploading image…"
+	u.ctx.Async(func() {
+		var text strings.Builder
+		var err error
+		for _, f := range list {
+			var p string
+			if p, err = uploadImage(f); err != nil {
+				break
+			}
+			text.WriteString(imageMarkdown(f.Get("name").String(), p))
+		}
+		u.ctx.Dispatch(func(app.Context) {
+			switch {
+			case errors.Is(err, errSignedOut):
+				u.signedOut, u.status = true, ""
+			case err != nil:
+				u.status = "Could not upload the image: " + err.Error()
+			default:
+				u.status = ""
+			}
+			if text.Len() > 0 && u.current == id && u.editing {
+				u.insertText(text.String())
+			}
+		})
+	})
+}
+
+// imageMarkdown is a Markdown image of src, described by the file name.
+func imageMarkdown(file, src string) string {
+	alt := strings.TrimSuffix(file, path.Ext(file))
+	alt = strings.NewReplacer("[", "", "]", "", "\n", " ", "\\", "").Replace(alt)
+	return "![" + alt + "](" + src + ")\n"
+}
+
+// insertText replaces the editor's selection with s.
+func (u *ui) insertText(s string) {
+	el := app.Window().GetElementByID("body")
+	el.Call("focus")
+	// execCommand keeps the browser's undo history and fires the input event.
+	if app.Window().Get("document").Call("execCommand", "insertText", false, s).Bool() {
+		return
+	}
+	v := el.Get("value").String()
+	from := byteOffset(v, el.Get("selectionStart").Int())
+	to := byteOffset(v, el.Get("selectionEnd").Int())
+	v = v[:from] + s + v[to:]
+	el.Set("value", v)
+	c := utf16Offset(v, from+len(s))
 	el.Call("setSelectionRange", c, c)
 	u.edit(func(n *note.Note) { n.Body = v })
 }

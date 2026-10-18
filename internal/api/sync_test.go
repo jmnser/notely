@@ -64,6 +64,9 @@ func TestSync(t *testing.T) {
 	writeNote(t, notes, "Inbox.md", "a")
 	writeNote(t, notes, "work/Plan.md", "b")
 	writeNote(t, notes, ".users.json", "secret")
+	writeNote(t, notes, ".images/0123456789abcdef0123456789abcdef.png", "png")
+	writeNote(t, notes, ".images/.0123456789abcdef0123456789abcdef.png.ABC.tmp", "partial")
+	writeNote(t, notes, ".images/sub/x.md", "nested")
 	if err := os.Symlink("/etc/hosts", filepath.Join(notes, "leak.md")); err != nil {
 		t.Fatal(err)
 	}
@@ -86,7 +89,7 @@ func TestSync(t *testing.T) {
 	if st := sync(); st.Commit == "" {
 		t.Error("first sync pushed nothing")
 	}
-	if files, n := remoteFiles(t, remote); !slices.Equal(files, []string{"Inbox.md", "work/Plan.md"}) || n != 1 {
+	if files, n := remoteFiles(t, remote); !slices.Equal(files, []string{"Inbox.md", "images/0123456789abcdef0123456789abcdef.png", "work/Plan.md"}) || n != 1 {
 		t.Errorf("remote = %v, %d commits", files, n)
 	}
 	if st := sync(); st.Commit != "" {
@@ -98,7 +101,7 @@ func TestSync(t *testing.T) {
 		t.Fatal(err)
 	}
 	sync()
-	if files, n := remoteFiles(t, remote); !slices.Equal(files, []string{"work/Plan.md"}) || n != 2 {
+	if files, n := remoteFiles(t, remote); !slices.Equal(files, []string{"images/0123456789abcdef0123456789abcdef.png", "work/Plan.md"}) || n != 2 {
 		t.Errorf("after edit: remote = %v, %d commits", files, n)
 	}
 
@@ -118,7 +121,7 @@ func TestSync(t *testing.T) {
 		t.Fatal(err)
 	}
 	sync()
-	if files, n := remoteFiles(t, remote); !slices.Equal(files, []string{"work/Plan.md"}) || n != 4 {
+	if files, n := remoteFiles(t, remote); !slices.Equal(files, []string{"images/0123456789abcdef0123456789abcdef.png", "work/Plan.md"}) || n != 4 {
 		t.Errorf("after remote commit: remote = %v, %d commits", files, n)
 	}
 }

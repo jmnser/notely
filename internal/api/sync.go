@@ -3,6 +3,7 @@ package api
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -351,8 +352,9 @@ func openRepo(dir, remote string) (*git.Repository, error) {
 	return repo, repo.SetConfig(cfg)
 }
 
-// mirror makes dst hold exactly the .md files of src. Dot entries and
-// symbolic links are skipped; os.Root keeps all access inside both trees.
+// mirror makes dst hold exactly the .md files of src and its images, which
+// .images/ holds and images/ gets. Other dot entries and symbolic links are
+// skipped; os.Root keeps all access inside both trees.
 func mirror(src, dst string) error {
 	from, err := os.OpenRoot(src)
 	if err != nil {
@@ -367,29 +369,46 @@ func mirror(src, dst string) error {
 
 	files := map[string]bool{}
 	err = fs.WalkDir(from.FS(), ".", func(rel string, d fs.DirEntry, err error) error {
+		out := rel
 		switch {
 		case err != nil:
 			return err
+		case rel == imageDir && d.IsDir():
+			return nil
+		case d.IsDir() && path.Dir(rel) == imageDir:
+			return fs.SkipDir
 		case rel != "." && strings.HasPrefix(d.Name(), "."):
 			if d.IsDir() {
 				return fs.SkipDir
 			}
 			return nil
-		case !d.Type().IsRegular() || path.Ext(rel) != ".md":
+		case !d.Type().IsRegular():
+			return nil
+		case path.Dir(rel) == imageDir:
+			if !imageName.MatchString(d.Name()) {
+				return nil
+			}
+			out = path.Join("images", d.Name())
+		case path.Ext(rel) != ".md":
 			return nil
 		}
-		files[rel] = true
+		files[out] = true
+		if out != rel {
+			if _, err := to.Stat(out); err == nil {
+				return nil // an image's name is its content
+			}
+		}
 		data, err := from.ReadFile(rel)
 		if err != nil {
 			return err
 		}
-		if old, err := to.ReadFile(rel); err == nil && bytes.Equal(old, data) {
+		if old, err := to.ReadFile(out); err == nil && bytes.Equal(old, data) {
 			return nil
 		}
-		if err := to.MkdirAll(path.Dir(rel), 0o700); err != nil {
+		if err := to.MkdirAll(path.Dir(out), 0o700); err != nil {
 			return err
 		}
-		return to.WriteFile(rel, data, 0o600)
+		return to.WriteFile(out, data, 0o600)
 	})
 	if err != nil {
 		return err
@@ -491,9 +510,11 @@ func host(remote string) string {
 	return strings.ToLower(u.Host)
 }
 
-// writeFile replaces name in root atomically, readable by the owner only.
+// writeFile replaces name in root atomically, readable by the owner only. The
+// temporary file is a dot file with a random name, so concurrent writes of
+// the same name do not mix.
 func writeFile(root *os.Root, name string, data []byte) error {
-	tmp := name + ".tmp"
+	tmp := path.Join(path.Dir(name), "."+path.Base(name)+"."+rand.Text()+".tmp")
 	if err := root.WriteFile(tmp, data, 0o600); err != nil {
 		_ = root.Remove(tmp)
 		return err
