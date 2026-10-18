@@ -63,7 +63,7 @@ tailscale funnel --bg --set-path=/notely http://127.0.0.1:8000/notely
 
 ## Sign-on
 
-On first start `notely` creates `<data>/.users.json` with the user `joe`. Add or change users there with hashes from:
+On first start `notely` creates `<data>/.users.json` with the user `joe`. Add or change users there, then restart, with hashes from:
 
 ```sh
 echo -n 'new password' | notely -hash
@@ -73,4 +73,4 @@ Serve over HTTPS beyond localhost; see [design.md](design.md#sign-on).
 
 ## Git backup
 
-Each user can push the notes to their own repository every hour: open **Git backup** at the bottom of the sidebar and enter the repository URL, branch and a token. For GitHub, create a fine-grained token for that repository only with _Contents: read and write_. The token is stored in `<data>/.sync/<user>/token` on the server, never in git. See [design.md](design.md#git-backup).
+Each user can push the notes to their own repository every `-sync-interval` (default 1h): open **Git backup** at the bottom of the sidebar and enter the repository URL, branch and a token. For GitHub, create a fine-grained token for that repository only with _Contents: read and write_. The token is stored in `<data>/.sync/<user>/token` on the server, never in git. See [design.md](design.md#git-backup).

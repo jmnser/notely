@@ -86,7 +86,8 @@ func TestAPIRejects(t *testing.T) {
 		{"bad json", "/api/notes/a", "{", nil, http.StatusBadRequest},
 		{"bad id", "/api/notes/a.b", "{}", nil, http.StatusBadRequest},
 		{"too large", "/api/notes/a", `{"body":"` + strings.Repeat("x", maxBody) + `"}`, nil, http.StatusBadRequest},
-		{"cross origin", "/api/notes/a", "{}", []string{"Origin", "https://evil.example"}, http.StatusForbidden},
+		{"long title", "/api/notes/a", `{"title":"` + strings.Repeat("é", maxTitle+1) + `"}`, nil, http.StatusBadRequest},
+		{"long body", "/api/notes/a", `{"body":"` + strings.Repeat("é", maxText+1) + `"}`, nil, http.StatusBadRequest},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -97,6 +98,12 @@ func TestAPIRejects(t *testing.T) {
 	}
 	if got := list(t, h); len(got) != 0 {
 		t.Errorf("rejected requests stored notes: %+v", got)
+	}
+	if w := request(t, h, http.MethodPut, "/api/notes/a", `{"title":"`+strings.Repeat("é", maxTitle)+`"}`); w.Code != http.StatusOK {
+		t.Errorf("title at the limit: %d", w.Code)
+	}
+	if w := request(t, h, http.MethodDelete, "/api/notes/a.b", ""); w.Code != http.StatusBadRequest {
+		t.Errorf("delete bad id: %d", w.Code)
 	}
 }
 

@@ -86,12 +86,12 @@ func (s *store) put(n note.Note) (note.Note, error) {
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	old, moved := s.paths[n.ID]
+	old, exists := s.paths[n.ID]
 	rel := s.pathFor(n, old)
 	if err := s.write(rel, encode(n)); err != nil {
 		return note.Note{}, err
 	}
-	if moved && old != rel && !s.sameFile(old, rel) {
+	if exists && old != rel && !s.sameFile(old, rel) {
 		if err := s.remove(old); err != nil {
 			log.Print(err)
 		}
@@ -233,7 +233,23 @@ func fileName(s, fallback string) string {
 	if s = strings.Trim(s, " ."); s == "" {
 		return fallback
 	}
+	if stem, ext, ok := strings.Cut(s, "."); reserved[strings.ToUpper(strings.TrimRight(stem, " "))] {
+		s = stem + "-"
+		if ok {
+			s += "." + ext
+		}
+	}
 	return s
+}
+
+// reserved lists the device names Windows does not allow as file names, with
+// or without an extension.
+var reserved = map[string]bool{
+	"CON": true, "PRN": true, "AUX": true, "NUL": true,
+	"COM1": true, "COM2": true, "COM3": true, "COM4": true, "COM5": true,
+	"COM6": true, "COM7": true, "COM8": true, "COM9": true,
+	"LPT1": true, "LPT2": true, "LPT3": true, "LPT4": true, "LPT5": true,
+	"LPT6": true, "LPT7": true, "LPT8": true, "LPT9": true,
 }
 
 // encode renders n as Markdown with its fields in YAML front matter.

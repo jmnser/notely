@@ -26,6 +26,10 @@ import (
 	githttp "github.com/go-git/go-git/v5/plumbing/transport/http"
 )
 
+// syncTimeout bounds one user's sync, so a remote that stops answering cannot
+// hold up the others or the settings, which wait for the same lock.
+const syncTimeout = 5 * time.Minute
+
 // syncSettings is a user's git backup target. The token is kept apart, in
 // its own file.
 type syncSettings struct {
@@ -64,6 +68,7 @@ type syncer struct {
 
 	mu     sync.Mutex
 	status map[string]syncStatus
+	queued map[string]bool // users in runs
 }
 
 func newSyncer(notes string, users map[string]bool) *syncer {
@@ -73,6 +78,7 @@ func newSyncer(notes string, users map[string]bool) *syncer {
 		dir:    filepath.Join(notes, ".sync"), // dot files are not notes
 		runs:   make(chan string, 16),
 		status: map[string]syncStatus{},
+		queued: map[string]bool{},
 	}
 }
 
@@ -92,16 +98,26 @@ func (s *syncer) run(ctx context.Context, interval time.Duration) {
 		case <-tick:
 			s.syncAll(ctx)
 		case user := <-s.runs:
+			s.mu.Lock()
+			delete(s.queued, user)
+			s.mu.Unlock()
 			s.syncUser(ctx, user)
 		}
 	}
 }
 
-// request queues a sync of user.
+// request queues a sync of user unless one is queued already.
 func (s *syncer) request(user string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.queued[user] {
+		return
+	}
 	select {
 	case s.runs <- user:
-	default: // a sync is queued already
+		s.queued[user] = true
+	default: // the queue is full; the next interval syncs user
+		log.Print("sync queue full")
 	}
 }
 
@@ -123,6 +139,8 @@ func (s *syncer) syncUser(ctx context.Context, user string) {
 	}
 	s.work.Lock()
 	defer s.work.Unlock()
+	ctx, cancel := context.WithTimeout(ctx, syncTimeout)
+	defer cancel()
 	commit, err := s.push(ctx, user)
 	if errors.Is(err, errNotConfigured) {
 		return
@@ -438,7 +456,8 @@ func (s *syncer) handler() http.Handler {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		if _, hasToken, _ := s.settings(user); !hasToken && in.Token == "" {
+		// The stored token only goes to the host it was given for.
+		if old, hasToken, _ := s.settings(user); in.Token == "" && (!hasToken || host(old.Remote) != host(in.Remote)) {
 			http.Error(w, "a token is required", http.StatusBadRequest)
 			return
 		}
@@ -463,11 +482,25 @@ func (s *syncer) handler() http.Handler {
 	return mux
 }
 
+// host returns the lower-case host of a repository URL.
+func host(remote string) string {
+	u, err := url.Parse(remote)
+	if err != nil {
+		return ""
+	}
+	return strings.ToLower(u.Host)
+}
+
 // writeFile replaces name in root atomically, readable by the owner only.
 func writeFile(root *os.Root, name string, data []byte) error {
 	tmp := name + ".tmp"
 	if err := root.WriteFile(tmp, data, 0o600); err != nil {
+		_ = root.Remove(tmp)
 		return err
 	}
-	return root.Rename(tmp, name)
+	if err := root.Rename(tmp, name); err != nil {
+		_ = root.Remove(tmp)
+		return err
+	}
+	return nil
 }

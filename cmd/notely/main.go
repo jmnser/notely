@@ -6,6 +6,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"cmp"
 	"context"
 	"embed"
@@ -16,7 +17,6 @@ import (
 	"log"
 	"maps"
 	"net/http"
-	"net/http/httptest"
 	"os"
 	"strconv"
 	"strings"
@@ -45,9 +45,9 @@ func main() {
 	flag.Parse()
 
 	if *hash {
-		password, err := bufio.NewReader(os.Stdin).ReadString('\n')
+		password, _ := bufio.NewReader(os.Stdin).ReadString('\n')
 		if password = strings.TrimRight(password, "\r\n"); password == "" {
-			log.Fatal("no password: ", err)
+			log.Fatal("no password on stdin")
 		}
 		fmt.Println(api.HashPassword(password))
 		return
@@ -100,7 +100,8 @@ func main() {
 }
 
 // routes serves the API, the embedded files and the PWA under base. /healthz
-// also answers without base, for probes that bypass the proxy in front.
+// also answers without base, for probes that bypass the proxy in front. The
+// API guards itself against cross-origin requests.
 func routes(base string, backend, pwa http.Handler) http.Handler {
 	mux := http.NewServeMux()
 	mux.Handle("/api/", backend)
@@ -110,7 +111,20 @@ func routes(base string, backend, pwa http.Handler) http.Handler {
 	root := http.NewServeMux()
 	root.Handle("GET /healthz", backend)
 	root.Handle("/", withBase(base, mux))
-	return http.NewCrossOriginProtection().Handler(root)
+	return securityHeaders(root)
+}
+
+// securityHeaders forbids framing and MIME sniffing and keeps paths out of
+// the Referer sent to other sites.
+func securityHeaders(h http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hdr := w.Header()
+		hdr.Set("Content-Security-Policy", "frame-ancestors 'none'")
+		hdr.Set("X-Frame-Options", "DENY")
+		hdr.Set("X-Content-Type-Options", "nosniff")
+		hdr.Set("Referrer-Policy", "same-origin")
+		h.ServeHTTP(w, r)
+	})
 }
 
 // rootResolver resolves the app's root to root, which ends in "/" so that the
@@ -140,20 +154,30 @@ func (m *manifestID) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		m.next.ServeHTTP(w, r)
 		return
 	}
-	rec := httptest.NewRecorder()
-	m.next.ServeHTTP(rec, r)
+	buf := &bufferedResponse{header: http.Header{}, code: http.StatusOK}
+	m.next.ServeHTTP(buf, r)
+	maps.Copy(w.Header(), buf.header)
 	var manifest map[string]any
-	if rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &manifest) != nil {
-		maps.Copy(w.Header(), rec.Header())
-		w.WriteHeader(rec.Code)
-		_, _ = w.Write(rec.Body.Bytes())
+	if buf.code != http.StatusOK || json.Unmarshal(buf.body.Bytes(), &manifest) != nil {
+		w.WriteHeader(buf.code)
+		_, _ = w.Write(buf.body.Bytes())
 		return
 	}
 	manifest["id"] = m.id
-	maps.Copy(w.Header(), rec.Header())
 	w.Header().Del("Content-Length")
 	_ = json.NewEncoder(w).Encode(manifest)
 }
+
+// bufferedResponse keeps a response in memory.
+type bufferedResponse struct {
+	header http.Header
+	code   int
+	body   bytes.Buffer
+}
+
+func (b *bufferedResponse) Header() http.Header         { return b.header }
+func (b *bufferedResponse) WriteHeader(code int)        { b.code = code }
+func (b *bufferedResponse) Write(p []byte) (int, error) { return b.body.Write(p) }
 
 // themeColorScript colors the browser and Android system bars like the app's
 // surface, following the light or dark color scheme.

@@ -60,6 +60,9 @@ func TestRoutes(t *testing.T) {
 		if got != tc.want {
 			t.Errorf("base %q, path %q: got %q, want %q", tc.base, tc.path, got, tc.want)
 		}
+		if w.Header().Get("X-Content-Type-Options") != "nosniff" || w.Header().Get("Content-Security-Policy") == "" {
+			t.Errorf("base %q, path %q: security headers missing: %v", tc.base, tc.path, w.Header())
+		}
 	}
 }
 

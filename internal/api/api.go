@@ -5,11 +5,16 @@ import (
 	"log"
 	"net/http"
 	"regexp"
+	"unicode/utf8"
 
 	"github.com/jmnser/notely/internal/note"
 )
 
-const maxBody = 1 << 20
+const (
+	maxBody  = 1 << 20
+	maxTitle = 200    // characters, as the app's title field
+	maxText  = 100000 // characters, as the app's note field
+)
 
 var validID = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
 
@@ -31,6 +36,10 @@ func newHandler(s *store) http.Handler {
 			http.Error(w, "invalid id", http.StatusBadRequest)
 			return
 		}
+		if utf8.RuneCountInString(n.Title) > maxTitle || utf8.RuneCountInString(n.Body) > maxText {
+			http.Error(w, "note too long", http.StatusBadRequest)
+			return
+		}
 		n, err := s.put(n)
 		if err != nil {
 			serverError(w, err)
@@ -39,13 +48,18 @@ func newHandler(s *store) http.Handler {
 		writeJSON(w, n)
 	})
 	mux.HandleFunc("DELETE /api/notes/{id}", func(w http.ResponseWriter, r *http.Request) {
-		if err := s.delete(r.PathValue("id")); err != nil {
+		id := r.PathValue("id")
+		if !validID.MatchString(id) {
+			http.Error(w, "invalid id", http.StatusBadRequest)
+			return
+		}
+		if err := s.delete(id); err != nil {
 			serverError(w, err)
 			return
 		}
 		w.WriteHeader(http.StatusNoContent)
 	})
-	return http.NewCrossOriginProtection().Handler(mux)
+	return mux
 }
 
 func writeJSON(w http.ResponseWriter, v any) {

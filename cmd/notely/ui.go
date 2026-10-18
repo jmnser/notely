@@ -445,6 +445,13 @@ func (u *ui) diagrams() {
 			})
 			return nil
 		}))
+		script.Call("addEventListener", "error", app.FuncOf(func(app.Value, []app.Value) any {
+			u.ctx.Dispatch(func(app.Context) {
+				u.mermaid = 0 // retried on the next render, e.g. once back online
+				script.Call("remove")
+			})
+			return nil
+		}))
 		doc.Get("head").Call("appendChild", script)
 	case 2:
 		// Mermaid draws errors into the diagram; the rejected promise needs no handling.
@@ -466,7 +473,7 @@ func (u *ui) renderBackup() app.UI {
 	return app.Dialog().ID("backup").Body(
 		app.Form().OnSubmit(u.saveBackup).Body(
 			app.H2().Text("Git backup"),
-			app.P().Text("The notes are pushed to a branch of your repository every hour. "+
+			app.P().Text("The notes are pushed to a branch of your repository regularly. "+
 				"Use a token that can write to this repository only."),
 			field("Repository", app.Input().ID("backup-remote").Class("field").Type("url").
 				Placeholder("https://github.com/you/notes.git").Required(true)),
@@ -805,8 +812,12 @@ func (u *ui) check(_ app.Context, e app.Event) {
 		return
 	}
 	i, err := strconv.Atoi(attr.String())
+	if err != nil {
+		e.PreventDefault()
+		return
+	}
 	body, ok := toggle(cur.Body, i)
-	if err != nil || !ok {
+	if !ok {
 		e.PreventDefault()
 		return
 	}

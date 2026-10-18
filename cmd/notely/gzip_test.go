@@ -55,4 +55,9 @@ func TestGzipFiles(t *testing.T) {
 	if w := get("/web/missing.js", "gzip"); w.Code != http.StatusNotFound {
 		t.Errorf("missing file: %d", w.Code)
 	}
+	n := 0
+	h.cache.Range(func(any, any) bool { n++; return true })
+	if n != 1 {
+		t.Errorf("cache holds %d files, want 1", n)
+	}
 }
