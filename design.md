@@ -110,7 +110,7 @@ Task list checkboxes can be checked in view mode. Each rendered checkbox carries
 ### Android and offline
 
 - Under `-base`, the app's root is `base/` (`base` redirects there), so the PWA's start URL lies in the service worker's scope and the app starts offline. The manifest `id` stays the old start URL (`base`), so existing installs update in place; reinstall if one does not.
-- The `theme-color` meta follows the light or dark scheme for the status bar. Chrome colors the navigation bar from the manifest `theme_color` only, which cannot follow the scheme, so it is the dark surface `#211f26`; content keeps clear of them with `env(safe-area-inset-*)`.
+- The `theme-color` meta follows the light or dark scheme for the status bar. Chrome colors the navigation bar from the manifest `theme_color` only, which cannot follow the scheme, so it is the dark surface `#211f26`. Android 15+ ignores that color and shows the window background, which Chrome takes from the manifest `background_color`, so the manifest's is `#211f26` too (the page's loading background stays light); content keeps clear of them with `env(safe-area-inset-*)`.
 
 ### Mermaid
 
