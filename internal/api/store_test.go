@@ -130,6 +130,9 @@ func TestFileName(t *testing.T) {
 		" .hidden. ":            "hidden",
 		"":                      "fallback",
 		strings.Repeat("ä", 60): strings.Repeat("ä", 50),
+		"con":                   "con-",
+		"NUL.txt":               "NUL-.txt",
+		"Console":               "Console",
 	}
 	for in, want := range tests {
 		if got := fileName(in, "fallback"); got != want {

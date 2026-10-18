@@ -171,6 +171,9 @@ func TestSyncHandler(t *testing.T) {
 	if data, _ := os.ReadFile(token); string(data) != "ghp_secret" {
 		t.Error("token not kept")
 	}
+	if code, _ := do("PUT", `{"remote":"https://gitlab.com/a/c.git","branch":"notes"}`); code != http.StatusBadRequest {
+		t.Errorf("PUT new host without token = %d, want 400", code)
+	}
 	if code, _ := do("DELETE", ""); code != http.StatusNoContent {
 		t.Errorf("DELETE = %d", code)
 	}
@@ -211,5 +214,15 @@ func TestSyncRemoteChangeAndRemovedUser(t *testing.T) {
 	s.syncUser(ctx, "ann")
 	if _, n := remoteFiles(t, b); n != 1 {
 		t.Errorf("removed user synced: %d commits", n)
+	}
+}
+
+func TestSyncRequest(t *testing.T) {
+	s := newSyncer(t.TempDir(), map[string]bool{"ann": true, "bob": true})
+	s.request("ann")
+	s.request("ann")
+	s.request("bob")
+	if len(s.runs) != 2 {
+		t.Errorf("queued %d syncs, want 2", len(s.runs))
 	}
 }

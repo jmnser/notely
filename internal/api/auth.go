@@ -114,7 +114,10 @@ func (a *auth) login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !a.check(r, in.User, in.Password) {
-		time.Sleep(failureDelay)
+		select {
+		case <-time.After(failureDelay):
+		case <-r.Context().Done():
+		}
 		http.Error(w, "wrong user name or password", http.StatusUnauthorized)
 		return
 	}

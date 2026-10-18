@@ -32,7 +32,6 @@ linters:
 
     # Modern & idiomatic
     - modernize
-    - sloglint
     - prealloc
 
     # Security & performance

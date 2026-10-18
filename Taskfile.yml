@@ -10,7 +10,7 @@ tasks:
     sources: [go.mod, go.sum, cmd/notely/*.go, internal/**/*.go]
     generates: [cmd/notely/web/app.wasm]
     env: {GOOS: js, GOARCH: wasm}
-    cmd: go build -ldflags "-s -w" -o cmd/notely/web/app.wasm ./cmd/notely
+    cmd: go build -trimpath -ldflags "-s -w" -o cmd/notely/web/app.wasm ./cmd/notely
 
   build:
     desc: Build bin/notely

@@ -39,10 +39,15 @@ func (g *gzipFiles) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		g.next.ServeHTTP(w, r)
 		return
 	}
+	// Only embedded files are cached, so requests for others cannot grow it.
+	if fi, err := fs.Stat(g.fsys, name); err != nil || fi.IsDir() {
+		g.next.ServeHTTP(w, r)
+		return
+	}
 	v, _ := g.cache.LoadOrStore(name, &gzipped{})
 	z := v.(*gzipped)
 	z.once.Do(func() { z.data, z.err = g.compress(name) })
-	if z.err != nil { // missing files and directories: next answers
+	if z.err != nil {
 		g.next.ServeHTTP(w, r)
 		return
 	}
