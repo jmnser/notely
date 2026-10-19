@@ -3,6 +3,7 @@
 package main
 
 import (
+	"bytes"
 	"cmp"
 	"context"
 	"errors"
@@ -50,6 +51,10 @@ type (
 		dirty    map[string]int // the changes pushed
 		deleted  int            // the deletions pushed
 		session  string
+	}
+	passwordMsg struct {
+		password string
+		err      error
 	}
 	loggedInMsg struct {
 		token string
@@ -112,6 +117,7 @@ func filter(term string, targets []string) []list.Rank {
 type model struct {
 	client *client
 	state  *state
+	cfg    config
 
 	screen        screen
 	back          screen // where a prompt returns to
@@ -132,15 +138,16 @@ type model struct {
 	answer      func(string) tea.Cmd // runs the prompt's input, or "y" on confirmation
 
 	syncing, again bool
-	seq            int // change sequence, see state.Dirty
+	autoTried      bool // signed in with the config since the last sign-out
+	seq            int  // change sequence, see state.Dirty
 	status         string
 }
 
-func newModel(c *client, s *state) *model {
+func newModel(c *client, s *state, cfg config) *model {
 	if s.Dirty == nil {
 		s.Dirty = map[string]int{}
 	}
-	m := &model{client: c, state: s, dark: true}
+	m := &model{client: c, state: s, cfg: cfg, dark: true}
 	for _, seq := range s.Dirty {
 		m.seq = max(m.seq, seq)
 	}
@@ -165,14 +172,15 @@ func newModel(c *client, s *state) *model {
 	m.input.CharLimit = 300
 	m.setStyles()
 	m.refresh()
-	if s.Session == "" {
-		m.signIn()
-	}
 	return m
 }
 
 func (m *model) Init() tea.Cmd {
-	return tea.Batch(tea.RequestBackgroundColor, m.sync(), tick())
+	var login tea.Cmd
+	if m.state.Session == "" {
+		login = m.signIn()
+	}
+	return tea.Batch(tea.RequestBackgroundColor, m.sync(), tick(), login)
 }
 
 func tick() tea.Cmd { return tea.Tick(syncEvery, func(time.Time) tea.Msg { return tickMsg{} }) }
@@ -198,11 +206,16 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.sync()
 	case syncedMsg:
 		return m, m.synced(msg)
+	case passwordMsg:
+		if msg.err != nil {
+			return m, m.loginFailed(fmt.Errorf("password_command: %w", msg.err))
+		}
+		return m, m.login(m.cfg.Server.User, msg.password)
 	case loggedInMsg:
 		if msg.err != nil {
-			m.status = msg.err.Error()
-			return m, nil
+			return m, m.loginFailed(msg.err)
 		}
+		m.autoTried = false // the next sign-out tries the config again
 		m.state.Session, m.status, m.screen = msg.token, "", listScreen
 		m.password.SetValue("")
 		m.password.Blur()
@@ -318,16 +331,43 @@ func (m *model) loginKey(msg tea.KeyPressMsg) tea.Cmd {
 			m.user.Blur()
 			return m.password.Focus()
 		}
-		user, password := strings.TrimSpace(m.user.Value()), m.password.Value()
-		m.status = "Signing in…"
-		return func() tea.Msg {
-			ctx, cancel := context.WithTimeout(context.Background(), timeout)
-			defer cancel()
-			token, err := m.client.login(ctx, user, password)
-			return loggedInMsg{token: token, err: err}
-		}
+		return m.login(strings.TrimSpace(m.user.Value()), m.password.Value())
 	}
 	return m.forward(msg)
+}
+
+func (m *model) login(user, password string) tea.Cmd {
+	m.status = "Signing in…"
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		defer cancel()
+		token, err := m.client.login(ctx, user, password)
+		return loggedInMsg{token: token, err: err}
+	}
+}
+
+// autoLogin signs in with the configured password command. It gets the
+// terminal, so it can ask to unlock the keychain.
+func (m *model) autoLogin() tea.Cmd {
+	m.autoTried, m.status = true, "Signing in…"
+	var out bytes.Buffer
+	return tea.ExecProcess(passwordCommand(m.cfg.Server.PasswordCommand, &out), func(err error) tea.Msg {
+		if err != nil {
+			return passwordMsg{err: err}
+		}
+		password, err := firstLine(out.String())
+		return passwordMsg{password: password, err: err}
+	})
+}
+
+// loginFailed shows err on the sign-in screen.
+func (m *model) loginFailed(err error) tea.Cmd {
+	var cmd tea.Cmd
+	if m.screen != loginScreen {
+		cmd = m.signIn()
+	}
+	m.status = err.Error()
+	return cmd
 }
 
 // action runs the note actions shared by the list and the view.
@@ -387,13 +427,24 @@ func (m *model) action(msg tea.KeyPressMsg) (tea.Cmd, bool) {
 	return nil, false
 }
 
-// signIn shows the sign-in screen, after the prompt if one is open.
+// signIn signs in with the configured user and password command, once per
+// sign-out, else shows the sign-in screen after the prompt if one is open.
 func (m *model) signIn() tea.Cmd {
 	if m.screen == promptScreen || m.screen == confirmScreen {
 		m.back = loginScreen
 		return nil
 	}
+	if !m.autoTried && m.cfg.Server.User != "" && m.cfg.Server.PasswordCommand != "" {
+		return m.autoLogin()
+	}
 	m.screen = loginScreen
+	if m.user.Value() == "" {
+		m.user.SetValue(m.cfg.Server.User)
+	}
+	if m.user.Value() != "" {
+		m.user.Blur()
+		return m.password.Focus()
+	}
 	m.password.Blur()
 	return m.user.Focus()
 }
@@ -475,7 +526,7 @@ func editorCommand() []string {
 			return e
 		}
 	}
-	if runtime.GOOS == "windows" {
+	if runtime.GOOS == windows {
 		return []string{"notepad"}
 	}
 	return []string{"vi"}

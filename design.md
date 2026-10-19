@@ -128,7 +128,8 @@ Rendering stays in the browser so the Go build keeps no cgo or headless browser 
 
 A [Bubble Tea](https://github.com/charmbracelet/bubbletea) v2 client for the same API, local first like the web app and sharing its merge (`note.Merge`).
 
-- State per server lives in `<config dir>/notely/<hash of the URL>.json` (mode 0600): session token, notes and pending changes. It is saved atomically on every change. A lock file next to it keeps a second client for the same server from overwriting it; after a crash, remove the stale lock as the error says.
+- Configuration lives in `~/.config/notely/config.toml` (`$XDG_CONFIG_HOME` is honoured on every OS, `$NOTELY_CONFIG` overrides the path): server URL, user and `password_command`. Without a session the client runs that command with the terminal handed over, so a keychain can ask to be unlocked, and signs in with its first line; once per sign-out, then it shows the sign-in screen. `-init` writes the file with the OS keychain's lookup (`secret-tool`, libsecret, on Linux; `security` on macOS); user names are checked against the server's pattern, as they go into that shell command.
+- State per server lives next to it in `<hash of the URL>.json` (mode 0600): session token, notes and pending changes. It is saved atomically on every change. A lock file next to it keeps a second client for the same server from overwriting it; after a crash, remove the stale lock as the error says. State of v0.4 and v0.5, in the OS config directory, moves there on start.
 - Syncs run on start, after each change, on terminal focus and every 30 s.
 - Notes render with Glamour; editing opens the body in `$VISUAL`, `$EDITOR` or `vi` (`notepad` on Windows). An edit to a note deleted elsewhere meanwhile restores it. Search matches every word in title, space and body.
 - It refuses plain HTTP except to loopback addresses and never follows redirects, so the password and token stay on the server's TLS connection.

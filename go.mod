@@ -7,6 +7,7 @@ require (
 	charm.land/bubbletea/v2 v2.1.0
 	charm.land/glamour/v2 v2.0.1
 	charm.land/lipgloss/v2 v2.0.6
+	github.com/BurntSushi/toml v1.6.0
 	github.com/go-git/go-git/v5 v5.19.3
 	github.com/maxence-charriere/go-app/v10 v10.1.11
 	github.com/yuin/goldmark v1.8.6
