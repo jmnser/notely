@@ -12,6 +12,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"runtime/debug"
 
 	tea "charm.land/bubbletea/v2"
 )
@@ -23,7 +24,12 @@ func main() {
 	initialize := flag.Bool("init", false, "write a starter config that reads the password from the system keychain")
 	logout := flag.Bool("logout", false, "sign out and remove the notes from this device")
 	force := flag.Bool("force", false, "with -logout: also when changes are not synced or the server is unreachable")
+	showVersion := flag.Bool("version", false, "print the version and exit")
 	flag.Parse()
+	if *showVersion {
+		fmt.Println("notely", buildVersion())
+		return
+	}
 	if err := run(*server, *user, *initialize, *logout, *force); err != nil {
 		fmt.Fprintln(os.Stderr, "notely:", err)
 		os.Exit(1)
@@ -92,6 +98,21 @@ func signOut(c *client, s *state, force bool) error {
 		}
 	}
 	return s.remove()
+}
+
+// version is set at release time.
+var version string
+
+// buildVersion is the release version, else the module version go install
+// records, else "devel".
+func buildVersion() string {
+	if version != "" {
+		return version
+	}
+	if info, ok := debug.ReadBuildInfo(); ok && info.Main.Version != "" && info.Main.Version != "(devel)" {
+		return info.Main.Version
+	}
+	return "devel"
 }
 
 // randID returns a new note ID; IDs are made by clients so notes can be created offline.

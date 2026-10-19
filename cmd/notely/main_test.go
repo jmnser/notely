@@ -517,6 +517,17 @@ func TestStatePathMoves(t *testing.T) {
 	}
 }
 
+func TestBuildVersion(t *testing.T) {
+	if got := buildVersion(); got == "" {
+		t.Fatal("empty version")
+	}
+	defer func(v string) { version = v }(version)
+	version = "v1.2.3"
+	if got := buildVersion(); got != "v1.2.3" {
+		t.Fatalf("buildVersion() = %q", got)
+	}
+}
+
 func TestEditorCommand(t *testing.T) {
 	t.Setenv("VISUAL", " ")
 	t.Setenv("EDITOR", "code -w")
