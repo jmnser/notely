@@ -52,6 +52,7 @@ func run(server, user string, initialize, logout, force bool) error {
 	if err != nil {
 		return err
 	}
+	cfg = forServer(cfg, c.base)
 	if initialize {
 		user = cmp.Or(user, os.Getenv("USER"), os.Getenv("USERNAME"))
 		store, err := initConfig(path, c.base, user)
@@ -90,6 +91,15 @@ func run(server, user string, initialize, logout, force bool) error {
 		return nil
 	}
 	return err
+}
+
+// forServer drops the password command unless base is the configured
+// server: its password is for that server only.
+func forServer(cfg config, base string) config {
+	if c, err := newClient(cfg.Server.URL); err != nil || c.base != base {
+		cfg.Server.PasswordCommand = ""
+	}
+	return cfg
 }
 
 // signOut ends the session and removes the state. Unless forced, it keeps

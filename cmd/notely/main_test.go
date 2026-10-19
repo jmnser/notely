@@ -9,11 +9,12 @@ import (
 	"errors"
 	"net/http/httptest"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -328,6 +329,31 @@ func TestPasswordCommand(t *testing.T) {
 	}
 }
 
+func TestForServer(t *testing.T) {
+	var cfg config
+	cfg.Server.URL, cfg.Server.PasswordCommand = "https://example.com/notely/", "pass"
+	if got := forServer(cfg, "https://example.com/notely"); got.Server.PasswordCommand != "pass" {
+		t.Error("dropped the password command for the configured server")
+	}
+	if got := forServer(cfg, "https://evil.example"); got.Server.PasswordCommand != "" {
+		t.Error("kept the password command for another server")
+	}
+}
+
+func TestTitleLimitAndRejection(t *testing.T) {
+	m := signedIn(t)
+	press(m, "n")
+	m.input.SetValue(strings.Repeat("x", maxTitle+1))
+	press(m, "enter")
+	if len(m.state.Notes) != 0 || !strings.Contains(m.status, "at most") {
+		t.Fatalf("long title: %d notes, status %q", len(m.state.Notes), m.status)
+	}
+	drain(m, m.change(note.Note{ID: "a", Title: "Tabs", Space: "a\tb"})) // the server refuses control characters
+	if !strings.Contains(m.status, "“Tabs” could not be saved") {
+		t.Fatalf("status %q does not name the rejected note", m.status)
+	}
+}
+
 func TestAutoLogin(t *testing.T) {
 	m := signedIn(t)
 	m.cfg.Server.User, m.cfg.Server.PasswordCommand = "joe", "printf pw"
@@ -485,35 +511,40 @@ func TestLock(t *testing.T) {
 
 func TestStaleLock(t *testing.T) {
 	s, _ := loadState(filepath.Join(t.TempDir(), "x.json"))
-	name := s.path + ".lock"
-	gone := exec.Command("true")
-	if err := gone.Run(); err != nil {
-		t.Skip(err)
-	}
-	for content, held := range map[string]bool{
-		strconv.Itoa(gone.Process.Pid): false, // crashed
-		strconv.Itoa(os.Getpid()):      true,
-		"":                             true, // v0.8, just written
-	} {
-		if err := os.WriteFile(name, []byte(content), 0o600); err != nil {
-			t.Fatal(err)
-		}
-		unlock, err := s.lock()
-		if (err != nil) != held {
-			t.Errorf("lock over %q: %v, want held %v", content, err, held)
-		}
-		if err == nil {
-			unlock()
-		}
-	}
-	old := time.Now().Add(-time.Minute)
-	if err := os.WriteFile(name, nil, 0o600); err != nil || os.Chtimes(name, old, old) != nil {
+	if err := os.WriteFile(s.path+".lock", []byte("999999"), 0o600); err != nil { // left by a crash
 		t.Fatal(err)
 	}
-	if unlock, err := s.lock(); err != nil {
-		t.Errorf("lock over an old v0.8 lock: %v", err)
-	} else {
-		unlock()
+	unlock, err := s.lock()
+	if err != nil {
+		t.Fatalf("lock over a stale lock file: %v", err)
+	}
+	defer unlock()
+	if _, err := s.lock(); err == nil || !strings.Contains(err.Error(), strconv.Itoa(os.Getpid())) {
+		t.Fatalf("second lock: %v, want refused naming this process", err)
+	}
+}
+
+func TestLockRace(t *testing.T) {
+	s, _ := loadState(filepath.Join(t.TempDir(), "x.json"))
+	var holding, overlaps atomic.Int32
+	var wg sync.WaitGroup
+	for range 8 {
+		wg.Go(func() {
+			for range 20 {
+				if unlock, err := s.lock(); err == nil {
+					if holding.Add(1) > 1 {
+						overlaps.Add(1)
+					}
+					time.Sleep(time.Millisecond)
+					holding.Add(-1)
+					unlock()
+				}
+			}
+		})
+	}
+	wg.Wait()
+	if n := overlaps.Load(); n > 0 {
+		t.Fatalf("two clients held the lock at once %d times", n)
 	}
 }
 

@@ -92,11 +92,11 @@ func main() {
 		Resources:         rootResolver{ResourceResolver: app.PrefixedLocation(*base), root: *base + "/"},
 		RawHeaders:        []string{themeColorScript},
 	}}))
-	stop()
-	<-synced // pushes the last changes
-	if err != nil {
+	if err != nil { // e.g. the address is in use: there is nothing new to back up
 		log.Fatal(err)
 	}
+	stop()
+	<-synced // pushes the last changes
 }
 
 // routes serves the API, the embedded files and the PWA under base. /healthz
@@ -114,12 +114,14 @@ func routes(base string, backend, pwa http.Handler) http.Handler {
 	return securityHeaders(root)
 }
 
-// securityHeaders forbids framing and MIME sniffing and keeps paths out of
-// the Referer sent to other sites.
+// securityHeaders forbids framing, MIME sniffing and images from other sites
+// and keeps paths out of the Referer sent to other sites.
 func securityHeaders(h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		hdr := w.Header()
-		hdr.Set("Content-Security-Policy", "frame-ancestors 'none'")
+		// Images only from here: notes cannot make readers' browsers request
+		// other sites, which could track when a note is read.
+		hdr.Set("Content-Security-Policy", "frame-ancestors 'none'; img-src 'self' data: blob:")
 		hdr.Set("X-Frame-Options", "DENY")
 		hdr.Set("X-Content-Type-Options", "nosniff")
 		hdr.Set("Referrer-Policy", "same-origin")

@@ -140,3 +140,27 @@ func TestFileName(t *testing.T) {
 		}
 	}
 }
+
+func TestStoreDuplicateID(t *testing.T) {
+	dir := t.TempDir()
+	old := note.Note{ID: "a", Title: "Old", Updated: time.Now().Add(-time.Hour)}
+	newer := note.Note{ID: "a", Title: "New", Updated: time.Now()}
+	for name, n := range map[string]note.Note{"Old.md": old, "New.md": newer} { // a crash while renaming
+		if err := os.WriteFile(filepath.Join(dir, name), encode(n), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	s, err := openStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := files(t, dir); !slices.Equal(got, []string{"New.md"}) {
+		t.Fatalf("files = %v, want the older removed", got)
+	}
+	if err := s.delete("a"); err != nil {
+		t.Fatal(err)
+	}
+	if s, _ = openStore(dir); len(s.list()) != 0 {
+		t.Fatalf("deleted note is back: %v", s.list())
+	}
+}

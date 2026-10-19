@@ -15,6 +15,7 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"charm.land/bubbles/v2/key"
 	"charm.land/bubbles/v2/list"
@@ -31,6 +32,7 @@ const (
 	syncEvery   = 30 * time.Second // picks up changes made elsewhere and retries failed syncs
 	syncTimeout = 2 * time.Minute
 	maxWrap     = 100 // columns notes are wrapped at
+	maxTitle    = 200 // characters, as the server accepts
 )
 
 type screen int
@@ -422,7 +424,7 @@ func (m *model) action(msg tea.KeyPressMsg) (tea.Cmd, bool) {
 		}
 		return m.ask("New note (Space/Title)", space, func(path string) tea.Cmd {
 			space, title, ok := note.ParsePath(path)
-			if !ok {
+			if !ok || !m.validTitle(title) {
 				return nil
 			}
 			n := note.Note{ID: randID(), Space: space, Title: title}
@@ -454,7 +456,7 @@ func (m *model) action(msg tea.KeyPressMsg) (tea.Cmd, bool) {
 		}
 		return m.ask("Rename or move (Space/Title)", path, func(path string) tea.Cmd {
 			n := m.find(c.ID) // may have changed meanwhile
-			if space, title, ok := note.ParsePath(path); ok && n != nil {
+			if space, title, ok := note.ParsePath(path); ok && n != nil && m.validTitle(title) {
 				c := *n
 				c.Space, c.Title = space, title
 				return m.change(c)
@@ -468,6 +470,16 @@ func (m *model) action(msg tea.KeyPressMsg) (tea.Cmd, bool) {
 		return nil, true
 	}
 	return nil, false
+}
+
+// validTitle checks the server's limit, so a note is not rejected on every
+// sync.
+func (m *model) validTitle(title string) bool {
+	if utf8.RuneCountInString(title) > maxTitle {
+		m.status = fmt.Sprintf("Titles have at most %d characters.", maxTitle)
+		return false
+	}
+	return true
 }
 
 // signIn signs in with the configured user and password command, once per
@@ -656,8 +668,12 @@ func (m *model) synced(msg syncedMsg) tea.Cmd {
 		return nil
 	}
 	m.status = ""
-	for _, err := range msg.rejected {
-		m.status = "Some notes could not be saved: " + err.Error()
+	for id, err := range msg.rejected {
+		name := id // a deletion
+		if n := m.find(id); n != nil {
+			name = "“" + n.Label() + "”"
+		}
+		m.status = name + " could not be saved: " + err.Error()
 	}
 	for id, seq := range msg.dirty {
 		if _, bad := msg.rejected[id]; !bad && m.state.Dirty[id] == seq {

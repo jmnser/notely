@@ -160,6 +160,8 @@ func (c *client) send(ctx context.Context, method, path, token string, in any) (
 		return nil, errSignedOut
 	case http.StatusBadRequest:
 		return nil, badRequest(strings.TrimSpace(string(text)))
+	case http.StatusTooManyRequests, http.StatusServiceUnavailable: // sign-in throttled
+		return nil, errors.New(strings.TrimSpace(string(text)))
 	}
 	return nil, fmt.Errorf("%s %s: %s", method, path, res.Status)
 }

@@ -51,7 +51,7 @@ func signIn(user, password string) error {
 }
 
 // exchange pushes local changes to the backend and returns its notes and the
-// notes it rejected, which do not stop the others.
+// changes it rejected, which do not stop the others.
 func exchange(push []note.Note, deleted []string) ([]note.Note, map[string]error, error) {
 	rejected := map[string]error{}
 	for _, n := range push {
@@ -63,7 +63,10 @@ func exchange(push []note.Note, deleted []string) ([]note.Note, map[string]error
 		}
 	}
 	for _, id := range deleted {
-		if err := call(del, "/api/notes/"+id, nil, nil); err != nil {
+		var bad badRequest
+		if err := call(del, "/api/notes/"+id, nil, nil); errors.As(err, &bad) {
+			rejected[id] = err // dropped, so it does not block every sync
+		} else if err != nil {
 			return nil, nil, err
 		}
 	}

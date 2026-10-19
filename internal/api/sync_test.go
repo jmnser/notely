@@ -229,3 +229,23 @@ func TestSyncRequest(t *testing.T) {
 		t.Errorf("queued %d syncs, want 2", len(s.runs))
 	}
 }
+
+func TestBackupTransportRefusesInternal(t *testing.T) {
+	for addr, refused := range map[string]bool{
+		"127.0.0.1:443": true, "[::1]:443": true, "169.254.169.254:443": true, "[::ffff:127.0.0.1]:443": true,
+		"0.0.0.0:443": true, "192.168.1.10:443": false, "140.82.112.3:443": false,
+	} {
+		if err := refuseInternal("tcp", addr, nil); (err != nil) != refused {
+			t.Errorf("refuseInternal(%s) = %v, want refused %v", addr, err, refused)
+		}
+	}
+	srv := httptest.NewTLSServer(http.NotFoundHandler())
+	defer srv.Close()
+	res, err := backupTransport().RoundTrip(httptest.NewRequest(http.MethodGet, srv.URL, nil).WithContext(t.Context()))
+	if err == nil {
+		res.Body.Close()
+	}
+	if err == nil || !strings.Contains(err.Error(), "refused") {
+		t.Fatalf("request to a loopback server: %v", err)
+	}
+}

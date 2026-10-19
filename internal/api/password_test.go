@@ -23,7 +23,7 @@ func TestHashPassword(t *testing.T) {
 }
 
 func TestParseHash(t *testing.T) {
-	if _, err := parseHash(defaultHash); err != nil {
+	if _, err := parseHash(dummyHash); err != nil {
 		t.Errorf("default hash: %v", err)
 	}
 	for _, s := range []string{

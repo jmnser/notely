@@ -17,7 +17,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        target: [linux/amd64, js/wasm]
+        target: [linux/amd64, js/wasm, windows/amd64] # the client ships for Windows
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
@@ -42,6 +42,10 @@ jobs:
           go-version-file: go.mod
       - name: go.mod is tidy
         run: go mod tidy -diff
+      - name: No cgo
+        run: |
+          cgo=$(go list -deps -f '{{if .CgoFiles}}{{.ImportPath}}{{end}}' ./...)
+          [ -z "$cgo" ] || { echo "::error::packages need cgo: $cgo"; exit 1; }
       - run: go test ./...
       - name: Known vulnerabilities
         run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
