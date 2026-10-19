@@ -17,6 +17,6 @@ builds:
     binary: notely
     env: [CGO_ENABLED=0]
     flags: [-trimpath]
-    ldflags: ["-s -w"]
+    ldflags: ["-s -w -X main.version={{.Tag}}"]
     goos: [linux, darwin, windows]
     goarch: [amd64, arm64]
