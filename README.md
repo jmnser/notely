@@ -18,6 +18,17 @@ task test lint
 | `-base`          |                      | path prefix to serve under, e.g. `/notely`            |
 | `-hash`          |                      | print the argon2id hash of a password read from stdin |
 
+## Terminal client
+
+`notely-tui` reads and edits the notes of a `notely` server in the terminal. It keeps a copy and syncs changes when the server is reachable.
+
+```sh
+go install github.com/jmnser/notely/cmd/notely-tui@latest
+notely-tui -server https://<host>/notely   # or set NOTELY_SERVER
+```
+
+Notes open rendered; `e` edits one in `$VISUAL` or `$EDITOR`, `/` searches, `?` lists all keys. Plain HTTP only works for localhost. `-logout` signs out and removes the notes from the device.
+
 ## Container image
 
 `task image` builds `notely` on distroless (`static-debian13:nonroot`), tagged with `VERSION` (default `v0.0.0-<commit>`). It runs as UID 65532 and listens on 8000 with notes in `/data`.

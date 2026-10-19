@@ -62,29 +62,6 @@ func sortSpaces(spaces []*space, pinned map[string]bool) {
 	}
 }
 
-// spacePath cleans a space path entered by the user.
-func spacePath(name string) string {
-	var parts []string
-	for p := range strings.SplitSeq(name, "/") {
-		if p = strings.TrimSpace(p); p != "" {
-			parts = append(parts, p)
-		}
-	}
-	if path := strings.Join(parts, "/"); path != defaultSpace {
-		return path
-	}
-	return ""
-}
-
-// newPath parses a path typed to create something: "Work/" is the space Work,
-// "Work/Ideas" the note Ideas in Work and "Ideas" the note Ideas in the default
-// space. ok is false for an empty path.
-func newPath(path string) (space, title string, ok bool) {
-	path = strings.TrimSpace(path)
-	i := strings.LastIndexByte(path, '/')
-	return spacePath(path[:max(i, 0)]), strings.TrimSpace(path[i+1:]), path != ""
-}
-
 // spaceName is the name of space path s as entered by the user.
 func spaceName(s string) string {
 	if s == "" {

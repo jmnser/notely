@@ -21,7 +21,7 @@ const (
 	storageKey   = "notely"
 	drawerKey    = "notely-drawer" // the sidebar is collapsed
 	pinnedKey    = "notely-pinned" // pinned space paths
-	defaultSpace = "Notes"         // name shown for notes without a space
+	defaultSpace = note.DefaultSpace
 )
 
 // cache is the state kept in the browser's local storage.
@@ -350,7 +350,7 @@ func (u *ui) renderNote(n note.Note) app.UI {
 	}
 	return app.Li().Class(row).Body(
 		app.Button().Class("note").Body(
-			app.Span().Class("note-title").Text(label(n)),
+			app.Span().Class("note-title").Text(n.Label()),
 			app.Span().Class("note-meta").Text(n.Updated.Local().Format("Jan 2, 15:04")),
 		).OnClick(func(app.Context, app.Event) { u.open(n.ID) }, app.EventScope(n.ID)),
 		iconButton("edit", "Rename").OnClick(func(app.Context, app.Event) { u.rename(n.ID) }, app.EventScope(n.ID)),
@@ -358,17 +358,6 @@ func (u *ui) renderNote(n note.Note) app.UI {
 		pinButton("Pin", n.Pinned).
 			OnClick(func(app.Context, app.Event) { u.togglePin(n.ID) }, app.EventScope(n.ID)),
 	)
-}
-
-// label is the name of a note in the list.
-func label(n note.Note) string {
-	if t := strings.TrimSpace(n.Title); t != "" {
-		return t
-	}
-	if l, _, _ := strings.Cut(strings.TrimSpace(n.Body), "\n"); l != "" {
-		return l
-	}
-	return "Untitled"
 }
 
 // parentOf returns the parent of space path s, or "" for a top-level space.
@@ -950,7 +939,7 @@ func (u *ui) createNew(space string) {
 		title: "New", text: "Type a note name, or end with / for a space: Ideas, Work/, Work/Ideas.", ok: "Create",
 		input: true, list: true,
 		run: func(path string) {
-			if space, title, ok := newPath(path); ok {
+			if space, title, ok := note.ParsePath(path); ok {
 				u.create(space, title)
 			}
 		},
@@ -962,7 +951,7 @@ func (u *ui) renameSpace(s string) {
 	u.ask(prompt{
 		title: "Rename space", text: "Use / for subspaces, e.g. Work/Projects.", ok: "Rename", input: true, list: true,
 		run: func(name string) {
-			name = spacePath(name)
+			name = note.SpacePath(name)
 			if name == s || s == "" && name == "" {
 				return
 			}
@@ -974,13 +963,13 @@ func (u *ui) renameSpace(s string) {
 			}
 			for _, id := range ids {
 				n := u.find(id)
-				n.Space = spacePath(name + n.Space[len(s):])
+				n.Space = note.SpacePath(name + n.Space[len(s):])
 				u.changed(id)
 			}
 			for p := range maps.Clone(u.pinned) {
 				if within(p, s) {
 					u.pinSpace(p, false)
-					u.pinSpace(spacePath(name+p[len(s):]), true)
+					u.pinSpace(note.SpacePath(name+p[len(s):]), true)
 				}
 			}
 			u.expand(name)
@@ -998,7 +987,7 @@ func (u *ui) move(app.Context, app.Event) {
 		title: "Move to space", text: "Pick a space or type a new path, e.g. Work/Projects.", ok: "Move",
 		input: true, list: true,
 		run: func(name string) {
-			s := spacePath(name)
+			s := note.SpacePath(name)
 			u.edit(func(n *note.Note) { n.Space = s })
 			u.expand(s)
 		},
@@ -1047,7 +1036,7 @@ func (u *ui) remove(id string) {
 		return
 	}
 	u.ask(prompt{
-		title: "Delete note?", text: "“" + label(*n) + "” will be deleted on all devices.", ok: "Delete", danger: true,
+		title: "Delete note?", text: "“" + n.Label() + "” will be deleted on all devices.", ok: "Delete", danger: true,
 		run: func(string) {
 			u.notes = slices.DeleteFunc(u.notes, func(n note.Note) bool { return n.ID == id })
 			u.deleted = append(u.deleted, id)
@@ -1137,7 +1126,7 @@ func (u *ui) sync(app.Context) {
 				}
 			}
 			u.deleted = u.deleted[len(deleted):]
-			u.notes = merge(remote, u.notes, u.dirty, u.deleted)
+			u.notes = note.Merge(remote, u.notes, u.dirty, u.deleted)
 			if _, ok := u.dirty[u.current]; !ok {
 				u.open(u.current) // show changes made elsewhere
 			}
@@ -1147,22 +1136,4 @@ func (u *ui) sync(app.Context) {
 			}
 		})
 	})
-}
-
-// merge returns the remote notes without the locally deleted ones and with
-// the local version of notes that still have pending changes.
-func merge(remote, local []note.Note, dirty map[string]int, deleted []string) []note.Note {
-	notes := []note.Note{}
-	for _, n := range local {
-		if _, ok := dirty[n.ID]; ok {
-			notes = append(notes, n)
-		}
-	}
-	for _, n := range remote {
-		if _, ok := dirty[n.ID]; !ok && !slices.Contains(deleted, n.ID) {
-			notes = append(notes, n)
-		}
-	}
-	note.Sort(notes)
-	return notes
 }

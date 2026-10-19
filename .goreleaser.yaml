@@ -12,3 +12,11 @@ builds:
     flags: [-trimpath]
     ldflags: ["-s -w -X main.version={{.Tag}}"] # v-prefixed, as the image
     goarch: [amd64, arm64]
+  - id: notely-tui
+    main: ./cmd/notely-tui
+    binary: notely-tui
+    env: [CGO_ENABLED=0]
+    flags: [-trimpath]
+    ldflags: ["-s -w"]
+    goos: [linux, darwin, windows]
+    goarch: [amd64, arm64]
