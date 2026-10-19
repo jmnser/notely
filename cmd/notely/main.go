@@ -12,7 +12,9 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"os/signal"
 	"runtime/debug"
+	"syscall"
 
 	tea "charm.land/bubbletea/v2"
 )
@@ -80,7 +82,13 @@ func run(server, user string, initialize, logout, force bool) error {
 	if logout {
 		return signOut(c, s, force)
 	}
-	_, err = tea.NewProgram(newModel(c, s, cfg)).Run()
+	// Closing the terminal quits cleanly, so the lock is removed.
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGHUP, syscall.SIGTERM)
+	defer stop()
+	_, err = tea.NewProgram(newModel(c, s, cfg), tea.WithContext(ctx)).Run()
+	if ctx.Err() != nil {
+		return nil
+	}
 	return err
 }
 
