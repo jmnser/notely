@@ -9,10 +9,13 @@ import (
 	"errors"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 
@@ -478,6 +481,40 @@ func TestLock(t *testing.T) {
 		t.Fatal(err)
 	}
 	unlock()
+}
+
+func TestStaleLock(t *testing.T) {
+	s, _ := loadState(filepath.Join(t.TempDir(), "x.json"))
+	name := s.path + ".lock"
+	gone := exec.Command("true")
+	if err := gone.Run(); err != nil {
+		t.Skip(err)
+	}
+	for content, held := range map[string]bool{
+		strconv.Itoa(gone.Process.Pid): false, // crashed
+		strconv.Itoa(os.Getpid()):      true,
+		"":                             true, // v0.8, just written
+	} {
+		if err := os.WriteFile(name, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		unlock, err := s.lock()
+		if (err != nil) != held {
+			t.Errorf("lock over %q: %v, want held %v", content, err, held)
+		}
+		if err == nil {
+			unlock()
+		}
+	}
+	old := time.Now().Add(-time.Minute)
+	if err := os.WriteFile(name, nil, 0o600); err != nil || os.Chtimes(name, old, old) != nil {
+		t.Fatal(err)
+	}
+	if unlock, err := s.lock(); err != nil {
+		t.Errorf("lock over an old v0.8 lock: %v", err)
+	} else {
+		unlock()
+	}
 }
 
 func TestSignOut(t *testing.T) {
