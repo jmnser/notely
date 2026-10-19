@@ -10,6 +10,7 @@ import (
 	"maps"
 	"os"
 	"os/exec"
+	"runtime"
 	"slices"
 	"strings"
 	"time"
@@ -55,8 +56,9 @@ type (
 		err   error
 	}
 	editedMsg struct {
-		id, body string
-		err      error
+		note note.Note // as it was when the editor opened
+		body string
+		err  error
 	}
 	tickMsg struct{}
 )
@@ -69,7 +71,7 @@ var keys = struct {
 	create: key.NewBinding(key.WithKeys("n"), key.WithHelp("n", "new")),
 	rename: key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "rename/move")),
 	pin:    key.NewBinding(key.WithKeys("p"), key.WithHelp("p", "pin")),
-	remove: key.NewBinding(key.WithKeys("d"), key.WithHelp("d", "delete")),
+	remove: key.NewBinding(key.WithKeys("x", "delete"), key.WithHelp("x", "delete")),
 	sync:   key.NewBinding(key.WithKeys("s"), key.WithHelp("s", "sync")),
 	back:   key.NewBinding(key.WithKeys("esc", "q", "backspace"), key.WithHelp("esc", "back")),
 	quit:   key.NewBinding(key.WithKeys("ctrl+c"), key.WithHelp("ctrl+c", "quit")),
@@ -118,12 +120,16 @@ type model struct {
 
 	list     list.Model
 	view     viewport.Model
-	current  string // ID of the open note
-	user     textinput.Model
-	password textinput.Model
-	input    textinput.Model
-	question string
-	answer   func(string) tea.Cmd // runs the prompt's input, or "y" on confirmation
+	renderer *glamour.TermRenderer
+	// rendererKey is the style and wrap width renderer was made for.
+	rendererKey string
+	current     string // ID of the open note
+	selectID    string // ID of the note selected in the list
+	user        textinput.Model
+	password    textinput.Model
+	input       textinput.Model
+	question    string
+	answer      func(string) tea.Cmd // runs the prompt's input, or "y" on confirmation
 
 	syncing, again bool
 	seq            int // change sequence, see state.Dirty
@@ -142,6 +148,7 @@ func newModel(c *client, s *state) *model {
 	m.list = list.New(nil, list.NewDefaultDelegate(), 0, 0)
 	m.list.Title = "Notely"
 	m.list.Filter = filter
+	m.list.KeyMap.Quit = key.NewBinding(key.WithKeys("q"), key.WithHelp("q", "quit")) // the default is v
 	m.list.SetStatusBarItemName("note", "notes")
 	m.list.AdditionalShortHelpKeys = func() []key.Binding {
 		return []key.Binding{keys.create, keys.edit, keys.pin, keys.remove}
@@ -159,8 +166,7 @@ func newModel(c *client, s *state) *model {
 	m.setStyles()
 	m.refresh()
 	if s.Session == "" {
-		m.screen = loginScreen
-		m.user.Focus()
+		m.signIn()
 	}
 	return m
 }
@@ -199,6 +205,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.state.Session, m.status, m.screen = msg.token, "", listScreen
 		m.password.SetValue("")
+		m.password.Blur()
 		m.save()
 		return m, m.sync()
 	case editedMsg:
@@ -206,12 +213,19 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.status = "Editor: " + msg.err.Error()
 			return m, nil
 		}
-		if n := m.find(msg.id); n != nil && msg.body != n.Body && msg.body != n.Body+"\n" {
-			c := *n
-			c.Body = msg.body
-			return m, m.change(c)
+		c, n := msg.note, m.find(msg.note.ID)
+		switch {
+		case n == nil && strings.TrimSpace(msg.body) == "":
+			return m, nil
+		case n == nil: // deleted elsewhere while editing: the edit wins, as in the web app
+			m.status = "“" + c.Label() + "” was deleted elsewhere; your edit restored it."
+		case msg.body == n.Body || msg.body == n.Body+"\n":
+			return m, nil
+		default:
+			c = *n
 		}
-		return m, nil
+		c.Body = msg.body
+		return m, m.change(c)
 	case tea.KeyPressMsg:
 		if key.Matches(msg, keys.quit) {
 			return m, tea.Quit
@@ -220,6 +234,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case list.FilterMatchesMsg: // also while a note is open
 		var cmd tea.Cmd
 		m.list, cmd = m.list.Update(msg)
+		m.reselect(m.selectID)
 		return m, cmd
 	}
 	return m, m.forward(msg)
@@ -252,19 +267,16 @@ func (m *model) key(msg tea.KeyPressMsg) tea.Cmd {
 	case promptScreen:
 		switch msg.String() {
 		case "enter":
-			m.screen = m.back
-			return m.answer(m.input.Value())
+			return tea.Batch(m.leave(), m.answer(m.input.Value()))
 		case "esc":
-			m.screen = m.back
-			return nil
+			return m.leave()
 		}
 		return m.forward(msg)
 	case confirmScreen:
-		m.screen = m.back
 		if msg.String() == "y" {
-			return m.answer("y")
+			return tea.Batch(m.leave(), m.answer("y"))
 		}
-		return nil
+		return m.leave()
 	case listScreen:
 		if m.list.FilterState() == list.Filtering {
 			return m.forward(msg)
@@ -277,7 +289,9 @@ func (m *model) key(msg tea.KeyPressMsg) tea.Cmd {
 		}
 	case viewScreen:
 		if key.Matches(msg, keys.back) {
-			m.screen, m.current = listScreen, ""
+			m.screen = listScreen
+			m.reselect(m.current)
+			m.current = ""
 			return nil
 		}
 	}
@@ -335,8 +349,7 @@ func (m *model) action(msg tea.KeyPressMsg) (tea.Cmd, bool) {
 	}
 	if key.Matches(msg, keys.sync) {
 		if m.state.Session == "" {
-			m.screen = loginScreen
-			return m.user.Focus(), true
+			return m.signIn(), true
 		}
 		return m.sync(), true
 	}
@@ -357,7 +370,9 @@ func (m *model) action(msg tea.KeyPressMsg) (tea.Cmd, bool) {
 			path = c.Space + "/" + c.Title
 		}
 		return m.ask("Rename or move (Space/Title)", path, func(path string) tea.Cmd {
-			if space, title, ok := note.ParsePath(path); ok {
+			n := m.find(c.ID) // may have changed meanwhile
+			if space, title, ok := note.ParsePath(path); ok && n != nil {
+				c := *n
 				c.Space, c.Title = space, title
 				return m.change(c)
 			}
@@ -370,6 +385,29 @@ func (m *model) action(msg tea.KeyPressMsg) (tea.Cmd, bool) {
 		return nil, true
 	}
 	return nil, false
+}
+
+// signIn shows the sign-in screen, after the prompt if one is open.
+func (m *model) signIn() tea.Cmd {
+	if m.screen == promptScreen || m.screen == confirmScreen {
+		m.back = loginScreen
+		return nil
+	}
+	m.screen = loginScreen
+	m.password.Blur()
+	return m.user.Focus()
+}
+
+// leave closes a prompt and returns to where it was opened, unless that is gone.
+func (m *model) leave() tea.Cmd {
+	m.screen = m.back
+	switch {
+	case m.screen == loginScreen:
+		return m.signIn()
+	case m.screen == viewScreen && m.find(m.current) == nil:
+		m.screen, m.current = listScreen, ""
+	}
+	return nil
 }
 
 func (m *model) ask(question, value string, answer func(string) tea.Cmd) tea.Cmd {
@@ -417,16 +455,30 @@ func (m *model) edit(n note.Note) tea.Cmd {
 		m.status = err.Error()
 		return nil
 	}
-	editor := strings.Fields(cmp.Or(os.Getenv("VISUAL"), os.Getenv("EDITOR"), "vi"))
+	editor := editorCommand()
 	cmd := exec.Command(editor[0], append(editor[1:], f.Name())...) //nolint:gosec // the user's own editor
 	return tea.ExecProcess(cmd, func(err error) tea.Msg {
 		defer os.Remove(f.Name()) //nolint:errcheck // best effort
 		if err != nil {
-			return editedMsg{id: n.ID, err: err}
+			return editedMsg{note: n, err: err}
 		}
 		body, err := os.ReadFile(f.Name())
-		return editedMsg{id: n.ID, body: string(body), err: err}
+		return editedMsg{note: n, body: string(body), err: err}
 	})
+}
+
+// editorCommand is $VISUAL or $EDITOR with its arguments, else the system's
+// default editor.
+func editorCommand() []string {
+	for _, env := range []string{"VISUAL", "EDITOR"} {
+		if e := strings.Fields(os.Getenv(env)); len(e) > 0 {
+			return e
+		}
+	}
+	if runtime.GOOS == "windows" {
+		return []string{"notepad"}
+	}
+	return []string{"vi"}
 }
 
 // change stores a new or changed note and syncs it.
@@ -500,11 +552,13 @@ func (m *model) synced(msg syncedMsg) tea.Cmd {
 	if errors.Is(msg.err, errSignedOut) {
 		m.state.Session, m.status = "", "Signed out. Changes stay on this device until you sign in."
 		m.save()
-		m.screen = loginScreen
-		return m.user.Focus()
+		return m.signIn()
 	}
 	if msg.err != nil {
 		m.status = "Offline. Changes are kept on this device."
+		if m.again { // changed meanwhile
+			return m.sync()
+		}
 		return nil
 	}
 	m.status = ""
@@ -532,13 +586,26 @@ func (m *model) synced(msg syncedMsg) tea.Cmd {
 // refresh shows the notes in the list and the open note. The command
 // filters the list again.
 func (m *model) refresh() tea.Cmd {
+	if i, ok := m.list.SelectedItem().(item); ok {
+		m.selectID = i.ID
+	}
 	items := make([]list.Item, len(m.state.Notes))
 	for i, n := range m.state.Notes {
 		items[i] = item{n}
 	}
 	cmd := m.list.SetItems(items)
+	m.reselect(m.selectID)
 	m.render()
 	return cmd
+}
+
+// reselect selects the note id in the list, which sorting may have moved.
+// While the list filters it again, its matches arrive later and select it then.
+func (m *model) reselect(id string) {
+	m.selectID = id
+	if i := slices.IndexFunc(m.list.VisibleItems(), func(i list.Item) bool { return i.(item).ID == id }); i >= 0 {
+		m.list.Select(i)
+	}
 }
 
 // render shows the open note as Markdown.
@@ -551,11 +618,16 @@ func (m *model) render() {
 	if m.dark {
 		style = "dark"
 	}
-	text := n.Body
-	r, err := glamour.NewTermRenderer(glamour.WithStandardStyle(style), glamour.WithWordWrap(min(m.width-4, maxWrap)))
-	if err == nil {
-		text, err = r.Render(n.Body)
+	wrap := min(m.width-4, maxWrap)
+	if k := fmt.Sprint(style, wrap); m.renderer == nil || m.rendererKey != k {
+		r, err := glamour.NewTermRenderer(glamour.WithStandardStyle(style), glamour.WithWordWrap(wrap))
+		if err != nil {
+			m.view.SetContent(n.Body)
+			return
+		}
+		m.renderer, m.rendererKey = r, k
 	}
+	text, err := m.renderer.Render(n.Body)
 	if err != nil {
 		text = n.Body
 	}
@@ -584,7 +656,7 @@ func (m *model) View() tea.View {
 			b.WriteString(title.Render(n.Label()) + faint.Render(cmp.Or(n.Space, note.DefaultSpace)) + "\n")
 		}
 		b.WriteString(m.view.View() + "\n")
-		b.WriteString(faint.Render(fmt.Sprintf(" %3.f%% · e edit · r rename · p pin · d delete · esc back",
+		b.WriteString(faint.Render(fmt.Sprintf(" %3.f%% · e edit · r rename · p pin · x delete · esc back",
 			m.view.ScrollPercent()*100)))
 	case loginScreen:
 		fmt.Fprintf(&b, "\n%s\n\n  %s\n\n  %s\n  %s\n\n  %s", title.Render("Sign in to Notely"),

@@ -128,9 +128,9 @@ Rendering stays in the browser so the Go build keeps no cgo or headless browser 
 
 A [Bubble Tea](https://github.com/charmbracelet/bubbletea) v2 client for the same API, local first like the web app and sharing its merge (`note.Merge`).
 
-- State per server lives in `<config dir>/notely-tui/<hash of the URL>.json` (mode 0600): session token, notes and pending changes. It is saved atomically on every change.
+- State per server lives in `<config dir>/notely-tui/<hash of the URL>.json` (mode 0600): session token, notes and pending changes. It is saved atomically on every change. A lock file next to it keeps a second client for the same server from overwriting it; after a crash, remove the stale lock as the error says.
 - Syncs run on start, after each change, on terminal focus and every 30 s.
-- Notes render with Glamour; editing opens the body in `$VISUAL`, `$EDITOR` or `vi`. Search matches every word in title, space and body.
+- Notes render with Glamour; editing opens the body in `$VISUAL`, `$EDITOR` or `vi` (`notepad` on Windows). An edit to a note deleted elsewhere meanwhile restores it. Search matches every word in title, space and body.
 - It refuses plain HTTP except to loopback addresses and never follows redirects, so the password and token stay on the server's TLS connection.
 - Bubble Tea does not build for `js/wasm`; `main_wasm.go` is a stub so the wasm lint covers the module.
 
@@ -165,6 +165,7 @@ Material Design 3 is implemented in plain CSS (`web/app.css`: M3 color, type, sh
 - Images need the backend: uploading needs a connection, and images not yet loaded do not show offline. Images no note references are kept. Images are stored as uploaded, including metadata such as a photo's GPS location, and go into the git backup.
 - Sessions and the last git backup results are lost on backend restart.
 - Git backup is one-way; edits made in the repository are not imported.
+- `notely-tui` runs once per server and user account at a time.
 - Run behind HTTPS beyond localhost: over plain HTTP the session cookie and password travel unencrypted.
 - Last write wins: an offline edit can overwrite a newer one, or bring back a note deleted elsewhere.
 - All notes are held in memory, fine for thousands of notes, not for millions.

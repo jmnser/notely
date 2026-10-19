@@ -84,7 +84,7 @@ func (c *client) logout(ctx context.Context, token string) error {
 }
 
 // exchange pushes local changes to the backend and returns its notes and the
-// notes it rejected, which do not stop the others.
+// changes it rejected, which do not stop the others.
 func (c *client) exchange(ctx context.Context, token string, push []note.Note, deleted []string) (
 	[]note.Note, map[string]error, error,
 ) {
@@ -98,7 +98,10 @@ func (c *client) exchange(ctx context.Context, token string, push []note.Note, d
 		}
 	}
 	for _, id := range deleted {
-		if err := c.call(ctx, http.MethodDelete, "/api/notes/"+url.PathEscape(id), token, nil, nil); err != nil {
+		var bad badRequest
+		if err := c.call(ctx, http.MethodDelete, "/api/notes/"+url.PathEscape(id), token, nil, nil); errors.As(err, &bad) {
+			rejected[id] = err // dropped, so it does not block every sync
+		} else if err != nil {
 			return nil, nil, err
 		}
 	}
