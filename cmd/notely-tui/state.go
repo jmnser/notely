@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -73,6 +74,25 @@ func (s *state) save() error {
 		return err
 	}
 	return os.Rename(f.Name(), s.path)
+}
+
+// lock makes sure only one client uses the state, since each save replaces
+// the whole file. unlock removes the lock file.
+func (s *state) lock() (unlock func(), err error) {
+	if err := os.MkdirAll(filepath.Dir(s.path), 0o700); err != nil {
+		return nil, err
+	}
+	name := s.path + ".lock"
+	f, err := os.OpenFile(name, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600) //nolint:gosec // next to the state
+	if errors.Is(err, fs.ErrExist) {
+		return nil, fmt.Errorf("another notely-tui uses this server; if none runs, remove %s", name)
+	} else if err != nil {
+		return nil, err
+	}
+	if err := f.Close(); err != nil {
+		return nil, err
+	}
+	return func() { os.Remove(name) }, nil //nolint:errcheck,gosec // best effort
 }
 
 // remove deletes the state file.

@@ -27,7 +27,7 @@ go install github.com/jmnser/notely/cmd/notely-tui@latest
 notely-tui -server https://<host>/notely   # or set NOTELY_SERVER
 ```
 
-Notes open rendered; `e` edits one in `$VISUAL` or `$EDITOR`, `/` searches, `?` lists all keys. Plain HTTP only works for localhost. `-logout` signs out and removes the notes from the device.
+Notes open rendered; `e` edits one in `$VISUAL` or `$EDITOR`, `/` searches, `?` lists all keys. Plain HTTP only works for localhost. `-logout` signs out and removes the notes from the device; it refuses while changes are not synced, unless `-force`.
 
 ## Container image
 

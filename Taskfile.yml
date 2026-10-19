@@ -13,7 +13,7 @@ tasks:
     cmd: go build -trimpath -ldflags "-s -w" -o cmd/notely/web/app.wasm ./cmd/notely
 
   build:
-    desc: Build bin/notely
+    desc: Build bin/notely and bin/notely-tui
     deps: [wasm]
     cmd: go build -o bin/ ./cmd/...
 
