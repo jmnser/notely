@@ -124,9 +124,19 @@ Fenced `mermaid` code blocks render as diagrams. The renderer turns them into `<
 
 Rendering stays in the browser so the Go build keeps no cgo or headless browser dependency.
 
+## Terminal client: `cmd/notely-tui`
+
+A [Bubble Tea](https://github.com/charmbracelet/bubbletea) v2 client for the same API, local first like the web app and sharing its merge (`note.Merge`).
+
+- State per server lives in `<config dir>/notely-tui/<hash of the URL>.json` (mode 0600): session token, notes and pending changes. It is saved atomically on every change.
+- Syncs run on start, after each change, on terminal focus and every 30 s.
+- Notes render with Glamour; editing opens the body in `$VISUAL`, `$EDITOR` or `vi`. Search matches every word in title, space and body.
+- It refuses plain HTTP except to loopback addresses and never follows redirects, so the password and token stay on the server's TLS connection.
+- Bubble Tea does not build for `js/wasm`; `main_wasm.go` is a stub so the wasm lint covers the module.
+
 ## Shared: `internal`
 
-- `note`: the `Note` model (space, title, Markdown body, pin) and its sort order (pinned first, then newest).
+- `note`: the `Note` model (space, title, Markdown body, pin), its sort order (pinned first, then newest), space paths and the local-first merge.
 - `serve`: HTTP server with timeouts and graceful shutdown.
 
 ## Features

@@ -36,21 +36,6 @@ Notes  1 1`
 	}
 }
 
-func TestSpacePath(t *testing.T) {
-	for in, want := range map[string]string{
-		"Work":               "Work",
-		" Work / Projects /": "Work/Projects",
-		"//a//b":             "a/b",
-		"Notes":              "",
-		" ":                  "",
-		"Notes/x":            "Notes/x",
-	} {
-		if got := spacePath(in); got != want {
-			t.Errorf("spacePath(%q) = %q, want %q", in, got, want)
-		}
-	}
-}
-
 func TestWithin(t *testing.T) {
 	for _, c := range []struct {
 		s, root string
@@ -60,23 +45,6 @@ func TestWithin(t *testing.T) {
 	} {
 		if got := within(c.s, c.root); got != c.want {
 			t.Errorf("within(%q, %q) = %v", c.s, c.root, got)
-		}
-	}
-}
-
-func TestNewPath(t *testing.T) {
-	for in, want := range map[string]string{
-		"Ideas":           "|Ideas|true",
-		" Work/ ":         "Work||true",
-		"Work/Ideas":      "Work|Ideas|true",
-		"Work / Sub/ Doc": "Work/Sub|Doc|true",
-		"Notes/x":         "|x|true",
-		"/":               "||true",
-		"  ":              "||false",
-	} {
-		space, title, ok := newPath(in)
-		if got := fmt.Sprintf("%s|%s|%v", space, title, ok); got != want {
-			t.Errorf("newPath(%q) = %s, want %s", in, got, want)
 		}
 	}
 }
