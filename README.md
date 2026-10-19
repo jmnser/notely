@@ -2,7 +2,7 @@
 
 Offline-first Markdown notes, organised in spaces. See [design.md](design.md).
 
-One binary, `notely`, serves the [go-app](https://go-app.dev) PWA and its JSON API, storing notes as Markdown files.
+`notely-server` serves the [go-app](https://go-app.dev) PWA and its JSON API, storing notes as Markdown files.
 
 ```sh
 task run   # http://localhost:8000
@@ -20,18 +20,18 @@ task test lint
 
 ## Terminal client
 
-`notely-tui` reads and edits the notes of a `notely` server in the terminal. It keeps a copy and syncs changes when the server is reachable.
+`notely` reads and edits the notes of a `notely-server` in the terminal. It keeps a copy and syncs changes when the server is reachable.
 
 ```sh
-go install github.com/jmnser/notely/cmd/notely-tui@latest
-notely-tui -server https://<host>/notely   # or set NOTELY_SERVER
+go install github.com/jmnser/notely/cmd/notely@latest
+notely -server https://<host>/notely   # or set NOTELY_SERVER
 ```
 
 Notes open rendered; `e` edits one in `$VISUAL` or `$EDITOR`, `/` searches, `?` lists all keys. Plain HTTP only works for localhost. `-logout` signs out and removes the notes from the device; it refuses while changes are not synced, unless `-force`.
 
 ## Container image
 
-`task image` builds `notely` on distroless (`static-debian13:nonroot`), tagged with `VERSION` (default `v0.0.0-<commit>`). It runs as UID 65532 and listens on 8000 with notes in `/data`.
+`task image` builds `notely-server` on distroless (`static-debian13:nonroot`), tagged with `VERSION` (default `v0.0.0-<commit>`). It runs as UID 65532 and listens on 8000 with notes in `/data`.
 
 ```sh
 task image VERSION=v1.2.3
@@ -39,6 +39,10 @@ docker run -d --name notely -p 8000:8000 -v notely:/data notely:v1.2.3
 ```
 
 Releases push it for `linux/amd64` and `linux/arm64` to `docker.io/<DOCKERHUB_USERNAME>/notely`, tagged with the version (tags are immutable, so there is no `latest`). The release workflow needs the repository variable `DOCKERHUB_USERNAME` and the secret `DOCKERHUB_TOKEN`, a Docker Hub access token with read and write access.
+
+## Upgrading to v0.5.0
+
+The server binary is now `notely-server`, also in the image (`/notely-server`); `notely` is the terminal client, which was `notely-tui`. Flags, image name and data are unchanged, so Quadlet units keep working. Replace `notely` with `notely-server` in your own scripts, and reinstall the client from `cmd/notely`: its state moves on first start.
 
 ## Upgrading from notely-api and notely-web
 
@@ -74,10 +78,10 @@ tailscale funnel --bg --set-path=/notely http://127.0.0.1:8000/notely
 
 ## Sign-on
 
-On first start `notely` creates `<data>/.users.json` with the user `joe`. Add or change users there, then restart, with hashes from:
+On first start `notely-server` creates `<data>/.users.json` with the user `joe`. Add or change users there, then restart, with hashes from:
 
 ```sh
-echo -n 'new password' | notely -hash
+echo -n 'new password' | notely-server -hash
 ```
 
 Serve over HTTPS beyond localhost; see [design.md](design.md#sign-on).

@@ -29,13 +29,20 @@ type state struct {
 }
 
 // statePath is the state file for server under the user's config directory.
+// It moves the state of v0.4.0, when the client was notely-tui.
 func statePath(server string) (string, error) {
-	dir, err := os.UserConfigDir()
+	config, err := os.UserConfigDir()
 	if err != nil {
 		return "", err
 	}
+	dir := filepath.Join(config, "notely")
+	if _, err := os.Stat(dir); errors.Is(err, fs.ErrNotExist) {
+		if err := os.Rename(filepath.Join(config, "notely-tui"), dir); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return "", err
+		}
+	}
 	sum := sha256.Sum256([]byte(server))
-	return filepath.Join(dir, "notely-tui", hex.EncodeToString(sum[:8])+".json"), nil
+	return filepath.Join(dir, hex.EncodeToString(sum[:8])+".json"), nil
 }
 
 // loadState reads the state at path; a missing file is an empty state.
@@ -85,7 +92,7 @@ func (s *state) lock() (unlock func(), err error) {
 	name := s.path + ".lock"
 	f, err := os.OpenFile(name, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600) //nolint:gosec // next to the state
 	if errors.Is(err, fs.ErrExist) {
-		return nil, fmt.Errorf("another notely-tui uses this server; if none runs, remove %s", name)
+		return nil, fmt.Errorf("another notely uses this server; if none runs, remove %s", name)
 	} else if err != nil {
 		return nil, err
 	}
