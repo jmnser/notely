@@ -3,6 +3,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -144,8 +145,8 @@ func drain(m *model, cmd tea.Cmd) {
 func TestModel(t *testing.T) {
 	c := backend(t)
 	s, _ := loadState(filepath.Join(t.TempDir(), "state.json"))
-	m := newModel(c, s)
-	if m.screen != loginScreen {
+	m := newModel(c, s, config{})
+	if m.signIn(); m.screen != loginScreen {
 		t.Fatalf("screen = %v, want sign-in", m.screen)
 	}
 	m.user.SetValue("joe")
@@ -184,12 +185,94 @@ func TestModel(t *testing.T) {
 	if m.screen != loginScreen || m.state.Session != "" {
 		t.Fatalf("expired session: screen %v", m.screen)
 	}
-	m.user.SetValue("")
-	for _, r := range "joe" {
+	for _, r := range "pw" { // the user name is kept
 		m.Update(tea.KeyPressMsg{Code: r, Text: string(r)})
 	}
-	if m.user.Value() != "joe" || m.password.Value() != "" {
+	if m.user.Value() != "joe" || m.password.Value() != "pw" {
 		t.Fatalf("typed into user %q and password %q", m.user.Value(), m.password.Value())
+	}
+}
+
+func TestConfig(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "notely", "config.toml")
+	if c, err := loadConfig(path); err != nil || c.Server.URL != "" {
+		t.Fatalf("missing config = %+v, %v", c, err)
+	}
+	if _, err := initConfig(path, "https://example.com", "joe; rm -rf ~"); err == nil {
+		t.Fatal("init accepted a user name unfit for the shell")
+	}
+	if _, err := initConfig(path, "https://example.com/notely", "joe"); err != nil {
+		t.Fatal(err)
+	}
+	if fi, err := os.Stat(path); err != nil || fi.Mode().Perm() != 0o600 {
+		t.Fatalf("config file: %v, %v", fi, err)
+	}
+	c, err := loadConfig(path)
+	lookup, _ := keychain("joe")
+	if err != nil || c.Server.URL != "https://example.com/notely" || c.Server.User != "joe" ||
+		c.Server.PasswordCommand != lookup {
+		t.Fatalf("loadConfig = %+v, %v", c, err)
+	}
+	if _, err := initConfig(path, "https://example.com", "joe"); err == nil {
+		t.Fatal("init replaced the config")
+	}
+	if err := os.WriteFile(path, []byte("[server\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := loadConfig(path); err == nil {
+		t.Fatal("loaded an invalid config")
+	}
+}
+
+func TestConfigDir(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", "/xdg")
+	if dir, _ := configDir(); dir != filepath.Join("/xdg", "notely") {
+		t.Errorf("configDir() = %s", dir)
+	}
+	t.Setenv("XDG_CONFIG_HOME", "relative")
+	t.Setenv("HOME", "/home/joe")
+	if dir, _ := configDir(); dir != filepath.Join("/home/joe", ".config", "notely") {
+		t.Errorf("configDir() with a relative XDG_CONFIG_HOME = %s", dir)
+	}
+	t.Setenv("NOTELY_CONFIG", "/etc/notely.toml")
+	if path, _ := configPath(); path != "/etc/notely.toml" {
+		t.Errorf("configPath() = %s", path)
+	}
+}
+
+func TestPasswordCommand(t *testing.T) {
+	var out bytes.Buffer
+	if err := passwordCommand("printf 'pw\\r\\nsecond line'", &out).Run(); err != nil {
+		t.Skip("no shell:", err)
+	}
+	if got, err := firstLine(out.String()); got != "pw" || err != nil {
+		t.Fatalf("firstLine(%q) = %q, %v", out.String(), got, err)
+	}
+	if _, err := firstLine("\n"); err == nil {
+		t.Fatal("empty output accepted")
+	}
+}
+
+func TestAutoLogin(t *testing.T) {
+	m := signedIn(t)
+	m.cfg.Server.User, m.cfg.Server.PasswordCommand = "joe", "printf pw"
+	m.state.Session = "expired"
+	drain(m, m.sync())
+	if !m.autoTried || m.screen == loginScreen {
+		t.Fatalf("expired session: screen %v, tried %v", m.screen, m.autoTried)
+	}
+	_, cmd := m.Update(passwordMsg{password: "pw"}) // as the command printed it
+	drain(m, cmd)
+	if m.state.Session == "" || m.screen != listScreen || m.autoTried {
+		t.Fatalf("auto sign-in: screen %v, status %q", m.screen, m.status)
+	}
+
+	m.state.Session = "expired"
+	drain(m, m.sync())
+	_, cmd = m.Update(passwordMsg{err: errors.New("keychain locked")})
+	drain(m, cmd)
+	if m.screen != loginScreen || !m.password.Focused() || !strings.Contains(m.status, "keychain locked") {
+		t.Fatalf("failed auto sign-in: screen %v, status %q", m.screen, m.status)
 	}
 }
 
@@ -203,7 +286,7 @@ func signedIn(t *testing.T) *model {
 	}
 	s, _ := loadState(filepath.Join(t.TempDir(), "state.json"))
 	s.Session = token
-	return newModel(c, s)
+	return newModel(c, s, config{})
 }
 
 func TestEditDeletedElsewhere(t *testing.T) {

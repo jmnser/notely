@@ -28,21 +28,38 @@ type state struct {
 	Deleted []string       `json:"deleted,omitempty"`
 }
 
-// statePath is the state file for server under the user's config directory.
-// It moves the state of v0.4.0, when the client was notely-tui.
+// statePath is the state file for server in configDir.
 func statePath(server string) (string, error) {
-	config, err := os.UserConfigDir()
+	dir, err := configDir()
 	if err != nil {
 		return "", err
 	}
-	dir := filepath.Join(config, "notely")
-	if _, err := os.Stat(dir); errors.Is(err, fs.ErrNotExist) {
-		if err := os.Rename(filepath.Join(config, "notely-tui"), dir); err != nil && !errors.Is(err, fs.ErrNotExist) {
-			return "", err
-		}
-	}
+	moveState(dir)
 	sum := sha256.Sum256([]byte(server))
 	return filepath.Join(dir, hex.EncodeToString(sum[:8])+".json"), nil
+}
+
+// moveState moves the state files of earlier versions, kept in the OS's
+// config directory under notely-tui (v0.4) or notely (v0.5), into dir. It
+// never replaces a file.
+func moveState(dir string) {
+	config, err := os.UserConfigDir()
+	if err != nil {
+		return
+	}
+	for _, old := range []string{filepath.Join(config, "notely-tui"), filepath.Join(config, "notely")} {
+		if old == dir {
+			continue
+		}
+		files, _ := filepath.Glob(filepath.Join(old, "*.json"))
+		for _, f := range files {
+			to := filepath.Join(dir, filepath.Base(f))
+			if _, err := os.Lstat(to); errors.Is(err, fs.ErrNotExist) && os.MkdirAll(dir, 0o700) == nil {
+				os.Rename(f, to) //nolint:errcheck,gosec // best effort: the old file stays
+			}
+		}
+		os.Remove(old) //nolint:errcheck,gosec // only if empty
+	}
 }
 
 // loadState reads the state at path; a missing file is an empty state.

@@ -24,7 +24,18 @@ task test lint
 
 ```sh
 go install github.com/jmnser/notely/cmd/notely@latest
-notely -server https://<host>/notely   # or set NOTELY_SERVER
+notely -init -server https://<host>/notely -user joe
+secret-tool store --label=Notely service notely user joe   # as -init prints; macOS: security add-generic-password …
+notely
+```
+
+`-init` writes `~/.config/notely/config.toml` (`$NOTELY_CONFIG` overrides it). `notely` signs in with its `password_command`, which reads the password from the system keychain, and asks for it if that fails. `-server` and `$NOTELY_SERVER` override `server.url`.
+
+```toml
+[server]
+url = "https://<host>/notely"
+user = "joe"
+password_command = "secret-tool lookup service notely user joe"
 ```
 
 Notes open rendered; `e` edits one in `$VISUAL` or `$EDITOR`, `/` searches, `?` lists all keys. Plain HTTP only works for localhost. `-logout` signs out and removes the notes from the device; it refuses while changes are not synced, unless `-force`.

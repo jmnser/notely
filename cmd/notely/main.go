@@ -17,27 +17,52 @@ import (
 )
 
 func main() {
-	server := flag.String("server", cmp.Or(os.Getenv("NOTELY_SERVER"), "http://localhost:8000"),
-		"URL notely is served under, e.g. https://host/notely ($NOTELY_SERVER)")
+	server := flag.String("server", "", "URL notely-server is served under, e.g. https://host/notely "+
+		"($NOTELY_SERVER, else the config's server.url, else http://localhost:8000)")
+	user := flag.String("user", "", "with -init: the user name (default the login name)")
+	initialize := flag.Bool("init", false, "write a starter config that reads the password from the system keychain")
 	logout := flag.Bool("logout", false, "sign out and remove the notes from this device")
 	force := flag.Bool("force", false, "with -logout: also when changes are not synced or the server is unreachable")
 	flag.Parse()
-	if err := run(*server, *logout, *force); err != nil {
+	if err := run(*server, *user, *initialize, *logout, *force); err != nil {
 		fmt.Fprintln(os.Stderr, "notely:", err)
 		os.Exit(1)
 	}
 }
 
-func run(server string, logout, force bool) error {
+func run(server, user string, initialize, logout, force bool) error {
+	path, err := configPath()
+	if err != nil {
+		return err
+	}
+	cfg, err := loadConfig(path)
+	if err != nil {
+		return err
+	}
+	server = cmp.Or(server, os.Getenv("NOTELY_SERVER"), cfg.Server.URL, "http://localhost:8000")
 	c, err := newClient(server)
 	if err != nil {
 		return err
 	}
-	path, err := statePath(c.base)
+	if initialize {
+		user = cmp.Or(user, os.Getenv("USER"), os.Getenv("USERNAME"))
+		store, err := initConfig(path, c.base, user)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("wrote %s\n", path)
+		if store != "" {
+			fmt.Printf("\nStore the password in the system keychain with:\n  %s\n", store)
+		} else {
+			fmt.Println("\nSet server.password_command to a command that prints the password.")
+		}
+		return nil
+	}
+	state, err := statePath(c.base)
 	if err != nil {
 		return err
 	}
-	s, err := loadState(path)
+	s, err := loadState(state)
 	if err != nil {
 		return err
 	}
@@ -49,7 +74,7 @@ func run(server string, logout, force bool) error {
 	if logout {
 		return signOut(c, s, force)
 	}
-	_, err = tea.NewProgram(newModel(c, s)).Run()
+	_, err = tea.NewProgram(newModel(c, s, cfg)).Run()
 	return err
 }
 
