@@ -1,7 +1,4 @@
 package main
 
-import "github.com/maxence-charriere/go-app/v10/pkg/app"
-
-func main() {
-	app.RunWhenOnBrowser()
-}
+// main keeps the package building for js/wasm, which lints the whole module.
+func main() { panic("notely needs a terminal") }

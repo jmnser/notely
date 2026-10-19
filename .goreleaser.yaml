@@ -2,19 +2,19 @@ version: 2
 
 before:
   hooks:
-    - env GOOS=js GOARCH=wasm go build -trimpath -ldflags "-s -w" -o cmd/notely/web/app.wasm ./cmd/notely
+    - env GOOS=js GOARCH=wasm go build -trimpath -ldflags "-s -w" -o cmd/notely-server/web/app.wasm ./cmd/notely-server
 
 builds:
-  - id: notely
-    main: ./cmd/notely
-    binary: notely
+  - id: notely-server
+    main: ./cmd/notely-server
+    binary: notely-server
     env: [CGO_ENABLED=0]
     flags: [-trimpath]
     ldflags: ["-s -w -X main.version={{.Tag}}"] # v-prefixed, as the image
     goarch: [amd64, arm64]
-  - id: notely-tui
-    main: ./cmd/notely-tui
-    binary: notely-tui
+  - id: notely
+    main: ./cmd/notely
+    binary: notely
     env: [CGO_ENABLED=0]
     flags: [-trimpath]
     ldflags: ["-s -w"]

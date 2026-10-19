@@ -7,23 +7,23 @@ env:
 tasks:
   wasm:
     desc: Build the frontend
-    sources: [go.mod, go.sum, cmd/notely/*.go, internal/**/*.go]
-    generates: [cmd/notely/web/app.wasm]
+    sources: [go.mod, go.sum, cmd/notely-server/*.go, internal/**/*.go]
+    generates: [cmd/notely-server/web/app.wasm]
     env: {GOOS: js, GOARCH: wasm}
-    cmd: go build -trimpath -ldflags "-s -w" -o cmd/notely/web/app.wasm ./cmd/notely
+    cmd: go build -trimpath -ldflags "-s -w" -o cmd/notely-server/web/app.wasm ./cmd/notely-server
 
   build:
-    desc: Build bin/notely and bin/notely-tui
+    desc: Build bin/notely-server and bin/notely
     deps: [wasm]
     cmd: go build -o bin/ ./cmd/...
 
   run:
-    desc: Run notely locally on http://localhost:8000
+    desc: Run notely-server locally on http://localhost:8000
     deps: [build]
-    cmd: ./bin/notely
+    cmd: ./bin/notely-server
 
   image:
-    desc: Build the notely container image, tagged with VERSION
+    desc: Build the notely-server container image, tagged with VERSION
     vars:
       REVISION:
         sh: git rev-parse HEAD

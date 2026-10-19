@@ -1,9 +1,9 @@
 # Design
 
-Notely is a small multi-user, offline-first note taking app in one binary.
+Notely is a small multi-user, offline-first note taking app: one server binary and a terminal client.
 
 ```
-browser (PWA, wasm) ──► notely ──► notes/*.md
+browser (PWA, wasm) ──► notely-server ──► notes/*.md
      localStorage        static files + JSON API (/api/)
 ```
 
@@ -24,7 +24,7 @@ Imported only by files built with `!wasm`, so none of it reaches the browser; CI
 ### Sign-on
 
 - Users live in `<data>/.users.json` (`-users` overrides), a JSON object of user name → argon2id hash in PHC format. A missing file is created with the default user `joe`. All users share the same notes. The file is read on start; restart after changing it.
-- New hashes: `echo -n 'password' | notely -hash` (argon2id, 64 MiB, 3 passes, 1 thread, random 16-byte salt). Hashes with other parameters are accepted within bounds.
+- New hashes: `echo -n 'password' | notely-server -hash` (argon2id, 64 MiB, 3 passes, 1 thread, random 16-byte salt). Hashes with other parameters are accepted within bounds.
 - `POST /api/login` checks the password in constant time and sets a random session token as cookie: `HttpOnly`, `SameSite=Strict`, `Secure` behind HTTPS (or `X-Forwarded-Proto: https` from a proxy in front), valid 30 days. Every other `/api/` call needs it, else 401.
 - Brute force: at most two password checks run at once (each takes 64 MiB), failures wait one second, unknown users cost a hash check like known ones.
 - Sessions are kept in memory: restarting the backend signs everyone out.
@@ -75,14 +75,14 @@ updated: 2026-10-15T09:12:00.123Z
 - Notes reference it as `![alt](/images/<name>)`. The app loads it from `GET /api/images/<name>` (signed on, cached as immutable, `sandbox` CSP); the git backup copies `.images/` to `images/`, where GitHub resolves the same root-relative link. Links `[text](/images/<name>)` work the same.
 - In edit mode the image button or pasting an image uploads it and inserts the Markdown at the cursor.
 
-## Frontend: `cmd/notely`
+## Frontend: `cmd/notely-server`
 
 One package built twice:
 
 - as WebAssembly it is the app that runs in the browser;
 - as a native binary it embeds that wasm and CSS, serves the PWA shell and the API. Browser and API therefore share one origin, so no CORS is needed.
 
-Size: the wasm calls the backend with the browser's `fetch`, not `net/http`, which keeps Go's TLS and HTTP client stack out of it (10 MB instead of 15 MB). `notely` serves the embedded `.wasm`, `.js`, `.css` and `.svg` files gzip-compressed (2.6 MB for the wasm, 1 MB for Mermaid), compressing each once on first request, and tells go-app the uncompressed wasm size for its loading progress.
+Size: the wasm calls the backend with the browser's `fetch`, not `net/http`, which keeps Go's TLS and HTTP client stack out of it (10 MB instead of 15 MB). `notely-server` serves the embedded `.wasm`, `.js`, `.css` and `.svg` files gzip-compressed (2.6 MB for the wasm, 1 MB for Mermaid), compressing each once on first request, and tells go-app the uncompressed wasm size for its loading progress.
 
 The app is local first:
 
@@ -120,15 +120,15 @@ Task list checkboxes can be checked in view mode. Each rendered checkbox carries
 
 ### Mermaid
 
-Fenced `mermaid` code blocks render as diagrams. The renderer turns them into `<pre class="mermaid">` with the source still HTML-escaped; the browser draws them with Mermaid's official bundle (`web/mermaid/`, MIT, 11.17.2), embedded in `notely`. It loads on the first diagram and is cached for offline use. Mermaid runs with `securityLevel: strict` (labels sanitised, no click handlers) and only on a visible view, because it measures text. Invalid diagrams show Mermaid's error diagram.
+Fenced `mermaid` code blocks render as diagrams. The renderer turns them into `<pre class="mermaid">` with the source still HTML-escaped; the browser draws them with Mermaid's official bundle (`web/mermaid/`, MIT, 11.17.2), embedded in `notely-server`. It loads on the first diagram and is cached for offline use. Mermaid runs with `securityLevel: strict` (labels sanitised, no click handlers) and only on a visible view, because it measures text. Invalid diagrams show Mermaid's error diagram.
 
 Rendering stays in the browser so the Go build keeps no cgo or headless browser dependency.
 
-## Terminal client: `cmd/notely-tui`
+## Terminal client: `cmd/notely`
 
 A [Bubble Tea](https://github.com/charmbracelet/bubbletea) v2 client for the same API, local first like the web app and sharing its merge (`note.Merge`).
 
-- State per server lives in `<config dir>/notely-tui/<hash of the URL>.json` (mode 0600): session token, notes and pending changes. It is saved atomically on every change. A lock file next to it keeps a second client for the same server from overwriting it; after a crash, remove the stale lock as the error says.
+- State per server lives in `<config dir>/notely/<hash of the URL>.json` (mode 0600): session token, notes and pending changes. It is saved atomically on every change. A lock file next to it keeps a second client for the same server from overwriting it; after a crash, remove the stale lock as the error says.
 - Syncs run on start, after each change, on terminal focus and every 30 s.
 - Notes render with Glamour; editing opens the body in `$VISUAL`, `$EDITOR` or `vi` (`notepad` on Windows). An edit to a note deleted elsewhere meanwhile restores it. Search matches every word in title, space and body.
 - It refuses plain HTTP except to loopback addresses and never follows redirects, so the password and token stay on the server's TLS connection.
@@ -165,7 +165,7 @@ Material Design 3 is implemented in plain CSS (`web/app.css`: M3 color, type, sh
 - Images need the backend: uploading needs a connection, and images not yet loaded do not show offline. Images no note references are kept. Images are stored as uploaded, including metadata such as a photo's GPS location, and go into the git backup.
 - Sessions and the last git backup results are lost on backend restart.
 - Git backup is one-way; edits made in the repository are not imported.
-- `notely-tui` runs once per server and user account at a time.
+- `notely` runs once per server and user account at a time.
 - Run behind HTTPS beyond localhost: over plain HTTP the session cookie and password travel unencrypted.
 - Last write wins: an offline edit can overwrite a newer one, or bring back a note deleted elsewhere.
 - All notes are held in memory, fine for thousands of notes, not for millions.

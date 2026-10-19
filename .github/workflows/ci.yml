@@ -49,10 +49,10 @@ jobs:
         # internal/api and its server-only dependencies must not reach the browser.
         env: {GOOS: js, GOARCH: wasm, MAX_BYTES: '11000000'}
         run: |
-          if go list -deps ./cmd/notely | grep -E '^(github.com/jmnser/notely/internal/api|github.com/go-git/|golang.org/x/crypto/argon2)'; then
+          if go list -deps ./cmd/notely-server | grep -E '^(github.com/jmnser/notely/internal/api|github.com/go-git/|golang.org/x/crypto/argon2)'; then
             echo "::error::the wasm imports server-only packages"; exit 1
           fi
-          go build -ldflags "-s -w" -o app.wasm ./cmd/notely
+          go build -ldflags "-s -w" -o app.wasm ./cmd/notely-server
           size=$(stat -c %s app.wasm)
           echo "app.wasm: $size bytes (max $MAX_BYTES)"
           [ "$size" -le "$MAX_BYTES" ] || { echo "::error::app.wasm is larger than $MAX_BYTES bytes"; exit 1; }
