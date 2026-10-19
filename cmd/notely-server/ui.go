@@ -139,9 +139,9 @@ func (u *ui) Render() app.UI {
 		for s := n.Space; s != ""; s = parentOf(s) {
 			known[s] = true
 		}
-		known[spaceName(n.Space)] = true // offered as "Work/" for paths
+		known[note.SpaceName(n.Space)] = true // offered as "Work/" for paths
 	}
-	spaces := tree(shown, u.pinned)
+	spaces := note.Tree(shown, u.pinned)
 	all := slices.Sorted(maps.Keys(known)) // offered in the dialog
 
 	cur := u.find(u.current)
@@ -207,7 +207,8 @@ func (u *ui) Render() app.UI {
 			app.Header().Class("top-bar").Body(
 				app.Div().Class("crumbs").Body(
 					iconButton("arrow_back", "Back").Class("icon-button back").OnClick(func(app.Context, app.Event) { u.open("") }),
-					app.Span().Class("path").Body(icon("folder"), app.Span().Text(strings.ReplaceAll(spaceName(space), "/", " / "))),
+					app.Span().Class("path").Body(icon("folder"), app.Span().Text(
+						strings.ReplaceAll(note.SpaceName(space), "/", " / "))),
 				),
 				app.Div().Class("tools").Body(
 					app.Div().Class("segmented").Body(
@@ -303,8 +304,8 @@ func (u *ui) Render() app.UI {
 
 // renderSpace renders space s and, if open, its subspaces and notes. While
 // searching every space is open.
-func (u *ui) renderSpace(s *space, searching bool) app.UI {
-	open := searching || !u.collapsed[s.path]
+func (u *ui) renderSpace(s *note.Space, searching bool) app.UI {
+	open := searching || !u.collapsed[s.Path]
 	class := "space"
 	if !open {
 		class += " collapsed"
@@ -313,29 +314,29 @@ func (u *ui) renderSpace(s *space, searching bool) app.UI {
 		app.Div().Class(class).Body(
 			app.Button().Class("space-name").Aria("expanded", open).Body(
 				app.Span().Class("chevron").Body(icon("expand_more")),
-				app.Span().Class("label").Text(s.name),
-				app.Span().Class("count").Text(s.count),
+				app.Span().Class("label").Text(s.Name),
+				app.Span().Class("count").Text(s.Count),
 			).OnClick(func(app.Context, app.Event) {
-				u.collapsed[s.path] = !u.collapsed[s.path]
-			}, app.EventScope(s.path)),
+				u.collapsed[s.Path] = !u.collapsed[s.Path]
+			}, app.EventScope(s.Path)),
 			iconButton("add", "New note or subspace").OnClick(func(app.Context, app.Event) {
-				u.createNew(s.path)
-			}, app.EventScope(s.path)),
+				u.createNew(s.Path)
+			}, app.EventScope(s.Path)),
 			iconButton("edit", "Rename space").OnClick(func(app.Context, app.Event) {
-				u.renameSpace(s.path)
-			}, app.EventScope(s.path)),
-			pinButton("Pin space", u.pinned[s.path]).
+				u.renameSpace(s.Path)
+			}, app.EventScope(s.Path)),
+			pinButton("Pin space", u.pinned[s.Path]).
 				OnClick(func(app.Context, app.Event) {
-					u.pinSpace(s.path, !u.pinned[s.path])
-				}, app.EventScope(s.path)),
+					u.pinSpace(s.Path, !u.pinned[s.Path])
+				}, app.EventScope(s.Path)),
 		),
 		app.If(open, func() app.UI {
 			return app.Ul().Body(
-				app.Range(s.spaces).Slice(func(i int) app.UI {
-					return u.renderSpace(s.spaces[i], searching)
+				app.Range(s.Spaces).Slice(func(i int) app.UI {
+					return u.renderSpace(s.Spaces[i], searching)
 				}),
-				app.Range(s.notes).Slice(func(i int) app.UI {
-					return u.renderNote(s.notes[i])
+				app.Range(s.Notes).Slice(func(i int) app.UI {
+					return u.renderNote(s.Notes[i])
 				}),
 			)
 		}),
@@ -957,7 +958,7 @@ func (u *ui) renameSpace(s string) {
 			}
 			var ids []string
 			for _, n := range u.notes {
-				if within(n.Space, s) {
+				if note.Within(n.Space, s) {
 					ids = append(ids, n.ID)
 				}
 			}
@@ -967,14 +968,14 @@ func (u *ui) renameSpace(s string) {
 				u.changed(id)
 			}
 			for p := range maps.Clone(u.pinned) {
-				if within(p, s) {
+				if note.Within(p, s) {
 					u.pinSpace(p, false)
 					u.pinSpace(note.SpacePath(name+p[len(s):]), true)
 				}
 			}
 			u.expand(name)
 		},
-	}, spaceName(s))
+	}, note.SpaceName(s))
 }
 
 // move moves the open note to another space.
@@ -991,7 +992,7 @@ func (u *ui) move(app.Context, app.Event) {
 			u.edit(func(n *note.Note) { n.Space = s })
 			u.expand(s)
 		},
-	}, spaceName(cur.Space))
+	}, note.SpaceName(cur.Space))
 }
 
 // edit applies f to the open note.

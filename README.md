@@ -38,7 +38,7 @@ user = "joe"
 password_command = "secret-tool lookup service notely user joe"
 ```
 
-Notes open rendered; `e` edits one in `$VISUAL` or `$EDITOR`, `/` searches, `?` lists all keys. Plain HTTP only works for localhost. `-logout` signs out and removes the notes from the device; it refuses while changes are not synced, unless `-force`.
+Notes are listed in their spaces; `enter`, `←` and `→` fold spaces. Notes open rendered; `e` edits one in `$VISUAL` or `$EDITOR`, `/` searches, `?` lists all keys. Plain HTTP only works for localhost. `-logout` signs out and removes the notes from the device; it refuses while changes are not synced, unless `-force`.
 
 ## Container image
 

@@ -69,47 +69,20 @@ type (
 )
 
 var keys = struct {
-	open, edit, create, rename, pin, remove, sync, back, quit key.Binding
+	open, expand, collapse, search, edit, create, rename, pin, remove, sync, back, quit key.Binding
 }{
-	open:   key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "open")),
-	edit:   key.NewBinding(key.WithKeys("e"), key.WithHelp("e", "edit")),
-	create: key.NewBinding(key.WithKeys("n"), key.WithHelp("n", "new")),
-	rename: key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "rename/move")),
-	pin:    key.NewBinding(key.WithKeys("p"), key.WithHelp("p", "pin")),
-	remove: key.NewBinding(key.WithKeys("x", "delete"), key.WithHelp("x", "delete")),
-	sync:   key.NewBinding(key.WithKeys("s"), key.WithHelp("s", "sync")),
-	back:   key.NewBinding(key.WithKeys("esc", "q", "backspace"), key.WithHelp("esc", "back")),
-	quit:   key.NewBinding(key.WithKeys("ctrl+c"), key.WithHelp("ctrl+c", "quit")),
-}
-
-// item is a note in the list.
-type item struct{ note.Note }
-
-func (i item) Title() string { return i.Label() }
-
-func (i item) Description() string {
-	d := cmp.Or(i.Space, note.DefaultSpace) + " · " + i.Updated.Local().Format("2006-01-02 15:04")
-	if i.Pinned {
-		d = "📌 " + d
-	}
-	return d
-}
-
-// FilterValue lets the filter search titles, spaces and bodies.
-func (i item) FilterValue() string { return i.Label() + "\n" + i.Space + "\n" + i.Body }
-
-// filter keeps the items containing every word of term, ignoring case. Unlike
-// the list's fuzzy default it does not match scattered letters of long bodies.
-func filter(term string, targets []string) []list.Rank {
-	words := strings.Fields(strings.ToLower(term))
-	var ranks []list.Rank
-	for i, t := range targets {
-		t = strings.ToLower(t)
-		if !slices.ContainsFunc(words, func(w string) bool { return !strings.Contains(t, w) }) {
-			ranks = append(ranks, list.Rank{Index: i})
-		}
-	}
-	return ranks
+	open:     key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "open/fold")),
+	expand:   key.NewBinding(key.WithKeys("right", "l"), key.WithHelp("→", "expand")),
+	collapse: key.NewBinding(key.WithKeys("left", "h"), key.WithHelp("←", "collapse")),
+	search:   key.NewBinding(key.WithKeys("/"), key.WithHelp("/", "search")),
+	edit:     key.NewBinding(key.WithKeys("e"), key.WithHelp("e", "edit")),
+	create:   key.NewBinding(key.WithKeys("n"), key.WithHelp("n", "new")),
+	rename:   key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "rename/move")),
+	pin:      key.NewBinding(key.WithKeys("p"), key.WithHelp("p", "pin")),
+	remove:   key.NewBinding(key.WithKeys("x", "delete"), key.WithHelp("x", "delete")),
+	sync:     key.NewBinding(key.WithKeys("s"), key.WithHelp("s", "sync")),
+	back:     key.NewBinding(key.WithKeys("esc", "q", "backspace"), key.WithHelp("esc", "back")),
+	quit:     key.NewBinding(key.WithKeys("ctrl+c"), key.WithHelp("ctrl+c", "quit")),
 }
 
 // model is the terminal UI. Changes apply locally at once and are synced in
@@ -129,8 +102,11 @@ type model struct {
 	renderer *glamour.TermRenderer
 	// rendererKey is the style and wrap width renderer was made for.
 	rendererKey string
-	current     string // ID of the open note
-	selectID    string // ID of the note selected in the list
+	current     string          // ID of the open note
+	selectKey   string          // row.key of the row selected in the list
+	collapsed   map[string]bool // space paths whose content is hidden
+	search      textinput.Model
+	searching   bool // typing into search
 	user        textinput.Model
 	password    textinput.Model
 	input       textinput.Model
@@ -147,22 +123,30 @@ func newModel(c *client, s *state, cfg config) *model {
 	if s.Dirty == nil {
 		s.Dirty = map[string]int{}
 	}
-	m := &model{client: c, state: s, cfg: cfg, dark: true}
+	m := &model{client: c, state: s, cfg: cfg, dark: true, collapsed: map[string]bool{}}
 	for _, seq := range s.Dirty {
 		m.seq = max(m.seq, seq)
 	}
 
-	m.list = list.New(nil, list.NewDefaultDelegate(), 0, 0)
-	m.list.Title = "Notely"
-	m.list.Filter = filter
+	m.list = list.New(nil, delegate{}, 0, 0)
+	m.list.SetShowTitle(false)
+	m.list.SetShowStatusBar(false)
+	m.list.SetFilteringEnabled(false)                                                 // search keeps the tree, see refresh
 	m.list.KeyMap.Quit = key.NewBinding(key.WithKeys("q"), key.WithHelp("q", "quit")) // the default is v
-	m.list.SetStatusBarItemName("note", "notes")
+	// Left and right fold spaces.
+	m.list.KeyMap.PrevPage = key.NewBinding(key.WithKeys("pgup", "b"), key.WithHelp("pgup", "prev page"))
+	m.list.KeyMap.NextPage = key.NewBinding(key.WithKeys("pgdown", "f"), key.WithHelp("pgdn", "next page"))
 	m.list.AdditionalShortHelpKeys = func() []key.Binding {
-		return []key.Binding{keys.create, keys.edit, keys.pin, keys.remove}
+		return []key.Binding{keys.search, keys.create, keys.edit, keys.remove}
 	}
 	m.list.AdditionalFullHelpKeys = func() []key.Binding {
-		return []key.Binding{keys.open, keys.create, keys.edit, keys.rename, keys.pin, keys.remove, keys.sync}
+		return []key.Binding{
+			keys.open, keys.expand, keys.collapse, keys.search, keys.create, keys.edit,
+			keys.rename, keys.pin, keys.remove, keys.sync,
+		}
 	}
+	m.search = textinput.New()
+	m.search.Prompt, m.search.Placeholder = "/ ", "Search notes"
 	m.view = viewport.New()
 	m.user, m.password, m.input = textinput.New(), textinput.New(), textinput.New()
 	m.user.Placeholder, m.password.Placeholder = "User name", "Password"
@@ -189,7 +173,8 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
-		m.list.SetSize(msg.Width, msg.Height-1)
+		m.list.SetSize(msg.Width, msg.Height-2)
+		m.search.SetWidth(min(msg.Width-6, 80))
 		m.view.SetWidth(msg.Width)
 		m.view.SetHeight(msg.Height - 3)
 		m.input.SetWidth(min(msg.Width-6, 80))
@@ -244,11 +229,6 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 		}
 		return m, m.key(msg)
-	case list.FilterMatchesMsg: // also while a note is open
-		var cmd tea.Cmd
-		m.list, cmd = m.list.Update(msg)
-		m.reselect(m.selectID)
-		return m, cmd
 	}
 	return m, m.forward(msg)
 }
@@ -258,7 +238,10 @@ func (m *model) forward(msg tea.Msg) tea.Cmd {
 	var cmd tea.Cmd
 	switch m.screen {
 	case listScreen:
+		var c2 tea.Cmd
 		m.list, cmd = m.list.Update(msg)
+		m.search, c2 = m.search.Update(msg)
+		cmd = tea.Batch(cmd, c2)
 	case viewScreen:
 		m.view, cmd = m.view.Update(msg)
 	case loginScreen:
@@ -291,19 +274,13 @@ func (m *model) key(msg tea.KeyPressMsg) tea.Cmd {
 		}
 		return m.leave()
 	case listScreen:
-		if m.list.FilterState() == list.Filtering {
-			return m.forward(msg)
-		}
-		if key.Matches(msg, keys.open) {
-			if i, ok := m.list.SelectedItem().(item); ok {
-				m.open(i.ID)
-			}
-			return nil
+		if cmd, ok := m.listKey(msg); ok {
+			return cmd
 		}
 	case viewScreen:
 		if key.Matches(msg, keys.back) {
 			m.screen = listScreen
-			m.reselect(m.current)
+			m.reselect("note:" + m.current)
 			m.current = ""
 			return nil
 		}
@@ -370,12 +347,78 @@ func (m *model) loginFailed(err error) tea.Cmd {
 	return cmd
 }
 
+// listKey searches and folds the tree.
+func (m *model) listKey(msg tea.KeyPressMsg) (tea.Cmd, bool) {
+	if m.searching {
+		switch msg.Code {
+		case tea.KeyEnter, tea.KeyDown:
+			m.searching = false
+			m.search.Blur()
+			return nil, true
+		case tea.KeyEscape:
+			m.searching = false
+			m.search.Blur()
+			m.search.SetValue("")
+			return m.refresh(), true
+		}
+		var cmd tea.Cmd
+		m.search, cmd = m.search.Update(msg)
+		return tea.Batch(cmd, m.refresh()), true
+	}
+	switch {
+	case key.Matches(msg, keys.search):
+		m.searching = true
+		return m.search.Focus(), true
+	case msg.Code == tea.KeyEscape && m.search.Value() != "":
+		m.search.SetValue("")
+		return m.refresh(), true
+	}
+	r, ok := m.list.SelectedItem().(row)
+	if !ok {
+		return nil, false
+	}
+	searching := m.search.Value() != "" // shows every space open
+	switch {
+	case key.Matches(msg, keys.open) && r.space == nil:
+		m.open(r.note.ID)
+	case key.Matches(msg, keys.open) && !searching:
+		return m.fold(r.space.Path, r.open), true
+	case key.Matches(msg, keys.expand) && r.space != nil && !r.open:
+		return m.fold(r.space.Path, false), true
+	case key.Matches(msg, keys.collapse) && r.space != nil && r.open && !searching:
+		return m.fold(r.space.Path, true), true
+	case key.Matches(msg, keys.collapse) && r.space == nil:
+		m.reselect("space:" + r.note.Space)
+	case key.Matches(msg, keys.collapse) && strings.Contains(r.space.Path, "/"):
+		m.reselect("space:" + r.space.Path[:strings.LastIndexByte(r.space.Path, '/')])
+	case key.Matches(msg, keys.open, keys.expand, keys.collapse): // nothing to do
+	default:
+		return nil, false
+	}
+	return nil, true
+}
+
+// fold collapses or expands the space at path.
+func (m *model) fold(path string, collapse bool) tea.Cmd {
+	if collapse {
+		m.collapsed[path] = true
+	} else {
+		delete(m.collapsed, path)
+	}
+	return m.refresh()
+}
+
 // action runs the note actions shared by the list and the view.
 func (m *model) action(msg tea.KeyPressMsg) (tea.Cmd, bool) {
 	if key.Matches(msg, keys.create) {
 		space := ""
-		if n := m.selected(); n != nil && n.Space != "" {
-			space = n.Space + "/"
+		if r, ok := m.list.SelectedItem().(row); ok && m.screen == listScreen && r.space != nil {
+			space = r.space.Path
+		} else if n := m.selected(); n != nil {
+			space = n.Space
+		}
+		if space != "" {
+			space += "/"
 		}
 		return m.ask("New note (Space/Title)", space, func(path string) tea.Cmd {
 			space, title, ok := note.ParsePath(path)
@@ -474,8 +517,8 @@ func (m *model) selected() *note.Note {
 	if m.screen == viewScreen {
 		return m.find(m.current)
 	}
-	if i, ok := m.list.SelectedItem().(item); ok {
-		return m.find(i.ID)
+	if r, ok := m.list.SelectedItem().(row); ok && r.space == nil {
+		return m.find(r.note.ID)
 	}
 	return nil
 }
@@ -634,27 +677,28 @@ func (m *model) synced(msg syncedMsg) tea.Cmd {
 	return cmd
 }
 
-// refresh shows the notes in the list and the open note. The command
-// filters the list again.
+// refresh shows the notes matching the search as a space tree, and the open
+// note.
 func (m *model) refresh() tea.Cmd {
-	if i, ok := m.list.SelectedItem().(item); ok {
-		m.selectID = i.ID
+	if r, ok := m.list.SelectedItem().(row); ok {
+		m.selectKey = r.key()
 	}
-	items := make([]list.Item, len(m.state.Notes))
-	for i, n := range m.state.Notes {
-		items[i] = item{n}
+	var shown []note.Note
+	for _, n := range m.state.Notes {
+		if matches(n, m.search.Value()) {
+			shown = append(shown, n)
+		}
 	}
-	cmd := m.list.SetItems(items)
-	m.reselect(m.selectID)
+	cmd := m.list.SetItems(rows(note.Tree(shown, nil), m.collapsed, m.search.Value() != ""))
+	m.reselect(m.selectKey)
 	m.render()
 	return cmd
 }
 
-// reselect selects the note id in the list, which sorting may have moved.
-// While the list filters it again, its matches arrive later and select it then.
-func (m *model) reselect(id string) {
-	m.selectID = id
-	if i := slices.IndexFunc(m.list.VisibleItems(), func(i list.Item) bool { return i.(item).ID == id }); i >= 0 {
+// reselect selects the row with key k, which sorting may have moved.
+func (m *model) reselect(k string) {
+	m.selectKey = k
+	if i := slices.IndexFunc(m.list.Items(), func(i list.Item) bool { return i.(row).key() == k }); i >= 0 {
 		m.list.Select(i)
 	}
 }
@@ -686,11 +730,9 @@ func (m *model) render() {
 }
 
 func (m *model) setStyles() {
-	d := list.NewDefaultDelegate()
-	d.Styles = list.NewDefaultItemStyles(m.dark)
-	m.list.SetDelegate(d)
+	m.list.SetDelegate(delegate{dark: m.dark})
 	m.list.Styles = list.DefaultStyles(m.dark)
-	for _, in := range []*textinput.Model{&m.user, &m.password, &m.input} {
+	for _, in := range []*textinput.Model{&m.user, &m.password, &m.input, &m.search} {
 		in.SetStyles(textinput.DefaultStyles(m.dark))
 	}
 }
@@ -701,7 +743,11 @@ func (m *model) View() tea.View {
 	var b strings.Builder
 	switch m.screen {
 	case listScreen:
-		b.WriteString(m.list.View())
+		header := title.Render("Notely")
+		if m.searching || m.search.Value() != "" {
+			header = " " + m.search.View()
+		}
+		b.WriteString(header + "\n" + m.list.View())
 	case viewScreen:
 		if n := m.find(m.current); n != nil {
 			b.WriteString(title.Render(n.Label()) + faint.Render(cmp.Or(n.Space, note.DefaultSpace)) + "\n")
