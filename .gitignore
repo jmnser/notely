@@ -1,4 +1,6 @@
 /bin/
+/notely
+/notely-server
 /dist/
 /cmd/notely-server/web/app.wasm
 notes.json*

@@ -1,15 +1,13 @@
-package main
+package note
 
 import (
 	"fmt"
 	"strings"
 	"testing"
-
-	"github.com/jmnser/notely/internal/note"
 )
 
 func TestTree(t *testing.T) {
-	notes := []note.Note{
+	notes := []Note{
 		{ID: "1", Space: "work/b"},
 		{ID: "2", Space: "work"},
 		{ID: "3"},
@@ -17,14 +15,14 @@ func TestTree(t *testing.T) {
 		{ID: "5", Space: "Home"},
 	}
 	var lines []string
-	var walk func([]*space, string)
-	walk = func(spaces []*space, indent string) {
+	var walk func([]*Space, string)
+	walk = func(spaces []*Space, indent string) {
 		for _, s := range spaces {
-			lines = append(lines, fmt.Sprintf("%s%s %s %d %d", indent, s.name, s.path, s.count, len(s.notes)))
-			walk(s.spaces, indent+"  ")
+			lines = append(lines, fmt.Sprintf("%s%s %s %d %d", indent, s.Name, s.Path, s.Count, len(s.Notes)))
+			walk(s.Spaces, indent+"  ")
 		}
 	}
-	walk(tree(notes, map[string]bool{"work": true, "work/b": true}), "")
+	walk(Tree(notes, map[string]bool{"work": true, "work/b": true}), "")
 	want := `work work 3 1
   b work/b 1 1
   a work/a 1 0
@@ -43,8 +41,8 @@ func TestWithin(t *testing.T) {
 	}{
 		{"a", "a", true}, {"a/b", "a", true}, {"ab", "a", false}, {"a", "", false}, {"", "", true},
 	} {
-		if got := within(c.s, c.root); got != c.want {
-			t.Errorf("within(%q, %q) = %v", c.s, c.root, got)
+		if got := Within(c.s, c.root); got != c.want {
+			t.Errorf("Within(%q, %q) = %v", c.s, c.root, got)
 		}
 	}
 }

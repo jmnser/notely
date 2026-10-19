@@ -116,12 +116,84 @@ func TestState(t *testing.T) {
 	}
 }
 
-func TestFilter(t *testing.T) {
-	targets := []string{"Shopping\nHome\nmilk and eggs", "Roadmap\nWork\nQ4 milestones"}
-	for term, want := range map[string]int{"": 2, "MILK": 1, "work q4": 1, "milk q4": 0, "mle": 0} {
-		if got := len(filter(term, targets)); got != want {
-			t.Errorf("filter(%q) = %d matches, want %d", term, got, want)
+func TestMatches(t *testing.T) {
+	n := note.Note{Title: "Shopping", Space: "Home", Body: "milk and eggs"}
+	for query, want := range map[string]bool{"": true, "MILK": true, "home eggs": true, "milk q4": false, "mle": false} {
+		if got := matches(n, query); got != want {
+			t.Errorf("matches(%q) = %v, want %v", query, got, want)
 		}
+	}
+}
+
+// keysOf lists the rows of the list by key, indented by depth.
+func keysOf(m *model) []string {
+	got := make([]string, 0, len(m.list.Items()))
+	for _, i := range m.list.Items() {
+		r := i.(row)
+		got = append(got, strings.Repeat(" ", r.depth)+r.key())
+	}
+	return got
+}
+
+func press(m *model, keys ...string) {
+	for _, k := range keys {
+		msg := tea.KeyPressMsg{Code: []rune(k)[0], Text: k}
+		switch k {
+		case "enter":
+			msg = tea.KeyPressMsg{Code: tea.KeyEnter}
+		case "esc":
+			msg = tea.KeyPressMsg{Code: tea.KeyEscape}
+		case "left":
+			msg = tea.KeyPressMsg{Code: tea.KeyLeft}
+		case "right":
+			msg = tea.KeyPressMsg{Code: tea.KeyRight}
+		}
+		drain(m, m.key(msg))
+	}
+}
+
+func TestTree(t *testing.T) {
+	m := signedIn(t)
+	m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	for _, n := range []note.Note{
+		{ID: "inbox", Title: "Inbox"},
+		{ID: "plan", Space: "Work", Title: "Plan", Body: "milk"},
+		{ID: "q4", Space: "Work/Projects", Title: "Q4"},
+	} {
+		drain(m, m.change(n))
+	}
+	want := []string{"space:", " note:inbox", "space:Work", " space:Work/Projects", "  note:q4", " note:plan"}
+	if got := keysOf(m); !slices.Equal(got, want) {
+		t.Fatalf("rows = %q, want %q", got, want)
+	}
+
+	m.reselect("note:q4")
+	press(m, "left") // to its space
+	if m.selectKey != "space:Work/Projects" {
+		t.Fatalf("left on a note selected %s", m.selectKey)
+	}
+	press(m, "left", "left") // collapse it, then to its parent
+	if m.selectKey != "space:Work" || slices.Contains(keysOf(m), "  note:q4") {
+		t.Fatalf("after collapsing: selected %s, rows %q", m.selectKey, keysOf(m))
+	}
+	press(m, "enter") // collapses Work
+	if got := keysOf(m); !slices.Equal(got, []string{"space:", " note:inbox", "space:Work"}) {
+		t.Fatalf("rows with Work collapsed = %q", got)
+	}
+
+	press(m, "/", "m", "i", "l", "k", "enter") // search shows matches in their open spaces
+	if got := keysOf(m); !slices.Equal(got, []string{"space:Work", " note:plan"}) {
+		t.Fatalf("rows while searching = %q", got)
+	}
+	press(m, "esc")
+	if got := keysOf(m); len(got) != 3 || m.search.Value() != "" {
+		t.Fatalf("rows after clearing the search = %q", got)
+	}
+
+	m.reselect("space:Work")
+	press(m, "n")
+	if m.input.Value() != "Work/" {
+		t.Fatalf("new note in a space starts with %q", m.input.Value())
 	}
 }
 
@@ -159,8 +231,8 @@ func TestModel(t *testing.T) {
 
 	drain(m, m.change(note.Note{ID: "a", Space: "Work", Title: "Roadmap"}))
 	drain(m, m.change(note.Note{ID: "b", Title: "Inbox"}))
-	if len(m.state.Dirty) != 0 || len(m.list.Items()) != 2 {
-		t.Fatalf("after sync: dirty %v, %d items, status %q", m.state.Dirty, len(m.list.Items()), m.status)
+	if len(m.state.Dirty) != 0 || len(m.list.Items()) != 4 { // two notes in two spaces
+		t.Fatalf("after sync: dirty %v, rows %q, status %q", m.state.Dirty, keysOf(m), m.status)
 	}
 	_, cmd := m.Update(editedMsg{note: *m.find("a"), body: "# Q4\n"})
 	drain(m, cmd)
@@ -372,16 +444,17 @@ func TestSelectionFollowsNote(t *testing.T) {
 	m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 	drain(m, m.change(note.Note{ID: "old", Title: "Old"}))
 	drain(m, m.change(note.Note{ID: "new", Title: "New"}))
-	m.list.Select(1) // old, below the newer note
-	drain(m, m.key(tea.KeyPressMsg{Code: 'p', Text: "p"}))
-	if i, _ := m.list.SelectedItem().(item); i.ID != "old" || !i.Pinned {
-		t.Fatalf("selected %+v after pinning, want the pinned old note", i)
+	m.list.Select(2) // old, below its space and the newer note
+	press(m, "p")
+	if r, _ := m.list.SelectedItem().(row); r.note.ID != "old" || !r.note.Pinned {
+		t.Fatalf("selected %+v after pinning, want the pinned old note", r)
 	}
 }
 
 func TestRenameKeepsNewerBody(t *testing.T) {
 	m := signedIn(t)
 	drain(m, m.change(note.Note{ID: "a", Title: "A", Body: "old"}))
+	m.reselect("note:a")
 	m.key(tea.KeyPressMsg{Code: 'r', Text: "r"})
 	m.find("a").Body = "newer" // synced from elsewhere meanwhile
 	m.input.SetValue("Work/B")
