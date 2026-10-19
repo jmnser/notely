@@ -3,19 +3,18 @@
 package main
 
 import (
-	"cmp"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
-	"time"
 
+	"github.com/jmnser/notely/internal/atomicfile"
 	"github.com/jmnser/notely/internal/note"
 )
 
@@ -79,74 +78,43 @@ func loadState(path string) (*state, error) {
 	return s, json.Unmarshal(data, s)
 }
 
-// save writes the state atomically.
+// save writes the state atomically and durably.
 func (s *state) save() error {
 	data, err := json.Marshal(s)
 	if err != nil {
 		return err
 	}
-	dir := filepath.Dir(s.path)
-	if err := os.MkdirAll(dir, 0o700); err != nil {
+	if err := os.MkdirAll(filepath.Dir(s.path), 0o700); err != nil {
 		return err
 	}
-	f, err := os.CreateTemp(dir, ".state-*") // mode 0600
-	if err != nil {
-		return err
-	}
-	defer os.Remove(f.Name()) //nolint:errcheck // gone after the rename
-	if _, err := f.Write(data); err != nil {
-		f.Close() //nolint:errcheck,gosec // the write error matters
-		return err
-	}
-	if err := f.Close(); err != nil {
-		return err
-	}
-	return os.Rename(f.Name(), s.path)
+	return atomicfile.WriteFile(s.path, data)
 }
 
 // lock makes sure only one client uses the state, since each save replaces
-// the whole file. The lock file holds the client's process ID; a lock whose
-// process is gone, say after a crash, is taken over. unlock removes it.
+// the whole file. It holds an OS file lock on <state>.lock, which the OS
+// releases when the process ends, even on a crash; the file holds the
+// process ID for the error message. unlock releases it.
 func (s *state) lock() (unlock func(), err error) {
 	if err := os.MkdirAll(filepath.Dir(s.path), 0o700); err != nil {
 		return nil, err
 	}
 	name := s.path + ".lock"
-	for range 3 {
-		f, err := os.OpenFile(name, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600) //nolint:gosec // next to the state
-		if err == nil {
-			_, err = fmt.Fprint(f, os.Getpid())
-			if err = cmp.Or(err, f.Close()); err != nil {
-				return nil, err
-			}
-			return func() { os.Remove(name) }, nil //nolint:errcheck,gosec // best effort
-		}
-		if !errors.Is(err, fs.ErrExist) {
-			return nil, err
-		}
-		if pid, ok := holder(name); ok {
-			return nil, fmt.Errorf("notely (process %d) already uses this server", pid)
-		}
-		if err := os.Remove(name); err != nil && !errors.Is(err, fs.ErrNotExist) {
-			return nil, err
-		}
-	}
-	return nil, fmt.Errorf("cannot lock %s", name)
-}
-
-// holder returns the running process holding the lock file name. A file
-// without a process ID, from v0.8 or earlier, counts as held while it is new,
-// as another client may be about to write its ID.
-func holder(name string) (pid int, ok bool) {
-	data, err := os.ReadFile(name) //nolint:gosec // next to the state
+	f, err := os.OpenFile(name, os.O_CREATE|os.O_RDWR, 0o600) //nolint:gosec // next to the state
 	if err != nil {
-		return 0, !errors.Is(err, fs.ErrNotExist) // gone: try again
+		return nil, err
 	}
-	if pid, err = strconv.Atoi(strings.TrimSpace(string(data))); err == nil && pid > 0 {
-		return pid, running(pid)
+	if err := lockFile(f); err != nil {
+		pid, _ := io.ReadAll(io.LimitReader(f, 20))
+		f.Close() //nolint:errcheck,gosec // read only
+		if p := strings.TrimSpace(string(pid)); p != "" {
+			return nil, fmt.Errorf("notely (process %s) already uses this server", p)
+		}
+		return nil, errors.New("another notely already uses this server")
 	}
-	fi, err := os.Stat(name)
-	return 0, err == nil && time.Since(fi.ModTime()) < 10*time.Second
+	if err := f.Truncate(0); err == nil {
+		fmt.Fprint(f, os.Getpid()) //nolint:errcheck // only for the message
+	}
+	return func() { f.Close() }, nil //nolint:errcheck,gosec // closing releases the lock
 }
 
 // remove deletes the state file.

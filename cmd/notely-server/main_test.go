@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/maxence-charriere/go-app/v10/pkg/app"
@@ -97,5 +98,14 @@ func TestManifestID(t *testing.T) {
 	h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/app.js", nil))
 	if w.Body.String() != `{"start_url":"/notely/","theme_color":"#fff","background_color":"#fff"}` {
 		t.Errorf("other paths changed: %s", w.Body)
+	}
+}
+
+func TestSecurityHeaders(t *testing.T) {
+	w := httptest.NewRecorder()
+	securityHeaders(http.NotFoundHandler()).ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/", nil))
+	if csp := w.Header().Get("Content-Security-Policy"); !strings.Contains(csp, "img-src 'self' data: blob:") ||
+		!strings.Contains(csp, "frame-ancestors 'none'") {
+		t.Errorf("Content-Security-Policy = %q", csp)
 	}
 }

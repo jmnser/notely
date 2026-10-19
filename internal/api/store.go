@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/jmnser/notely/internal/atomicfile"
 	"github.com/jmnser/notely/internal/note"
 )
 
@@ -28,6 +29,7 @@ func openStore(dir string) (*store, error) {
 		return nil, err
 	}
 	s := &store{dir: dir, notes: map[string]note.Note{}, paths: map[string]string{}}
+	var stale []string // older files of a note, left by a crash while moving it
 	err := filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
 		switch {
 		case err != nil:
@@ -54,8 +56,13 @@ func openStore(dir string) (*store, error) {
 			return nil
 		}
 		if old, ok := s.notes[n.ID]; ok {
-			log.Printf("id %s in %s and %s: keeping the newer", n.ID, s.paths[n.ID], rel)
-			if !n.Updated.After(old.Updated) {
+			older := rel
+			if n.Updated.After(old.Updated) {
+				older = s.paths[n.ID]
+			}
+			log.Printf("id %s in %s and %s: removing the older %s", n.ID, s.paths[n.ID], rel, older)
+			stale = append(stale, older)
+			if older == rel {
 				return nil
 			}
 		}
@@ -65,6 +72,11 @@ func openStore(dir string) (*store, error) {
 	})
 	if err != nil {
 		return nil, err
+	}
+	for _, rel := range stale { // else deleting the note would bring it back on the next start
+		if err := s.remove(rel); err != nil {
+			return nil, err
+		}
 	}
 	return s, nil
 }
@@ -178,22 +190,13 @@ func numbered(path, base string) bool {
 	return ok && err == nil && i > 1 && strconv.Itoa(i) == num
 }
 
-// write replaces rel atomically.
+// write replaces rel atomically and durably.
 func (s *store) write(rel string, data []byte) error {
 	path := filepath.Join(s.dir, rel)
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return err
 	}
-	tmp := filepath.Join(filepath.Dir(path), "."+filepath.Base(path)+".tmp")
-	if err := os.WriteFile(tmp, data, 0o600); err != nil {
-		_ = os.Remove(tmp)
-		return err
-	}
-	if err := os.Rename(tmp, path); err != nil {
-		_ = os.Remove(tmp)
-		return err
-	}
-	return nil
+	return atomicfile.WriteFile(path, data)
 }
 
 // remove deletes rel, and its space directory once empty.

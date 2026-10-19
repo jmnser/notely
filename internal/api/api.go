@@ -5,6 +5,8 @@ import (
 	"log"
 	"net/http"
 	"regexp"
+	"strings"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/jmnser/notely/internal/note"
@@ -14,6 +16,7 @@ const (
 	maxBody  = 1 << 20
 	maxTitle = 200    // characters, as the app's title field
 	maxText  = 100000 // characters, as the app's note field
+	maxSpace = 1000   // characters of a space path
 )
 
 var validID = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
@@ -36,8 +39,14 @@ func newHandler(s *store) http.Handler {
 			http.Error(w, "invalid id", http.StatusBadRequest)
 			return
 		}
-		if utf8.RuneCountInString(n.Title) > maxTitle || utf8.RuneCountInString(n.Body) > maxText {
+		n.Space = note.SpacePath(n.Space) // as the apps clean it
+		if utf8.RuneCountInString(n.Title) > maxTitle || utf8.RuneCountInString(n.Body) > maxText ||
+			utf8.RuneCountInString(n.Space) > maxSpace {
 			http.Error(w, "note too long", http.StatusBadRequest)
+			return
+		}
+		if strings.ContainsFunc(n.Title+n.Space, unicode.IsControl) { // titles and spaces are one line
+			http.Error(w, "control characters in title or space", http.StatusBadRequest)
 			return
 		}
 		n, err := s.put(n)

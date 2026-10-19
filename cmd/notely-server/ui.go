@@ -19,8 +19,9 @@ const (
 	debounce     = 500 * time.Millisecond
 	retry        = 30 * time.Second
 	storageKey   = "notely"
-	drawerKey    = "notely-drawer" // the sidebar is collapsed
-	pinnedKey    = "notely-pinned" // pinned space paths
+	signedOutKey = "notely-signed-out" // signed out on this device, even if the server missed it
+	drawerKey    = "notely-drawer"     // the sidebar is collapsed
+	pinnedKey    = "notely-pinned"     // pinned space paths
 	defaultSpace = note.DefaultSpace
 )
 
@@ -73,6 +74,7 @@ type ui struct {
 	again     bool // a sync was requested while one was running
 	retries   bool // a retry of a failed sync is scheduled
 	syncGen   int  // bumped on sign-out, so results of older syncs are dropped
+	saved     int  // seq when last persisted
 	update    bool // a new app version is available
 	backDepth int  // history entries pushed for in-app back steps, see syncBack
 	skipPop   int  // popstate events caused by syncBack itself
@@ -105,6 +107,10 @@ func (u *ui) OnMount(ctx app.Context) {
 	for _, id := range c.Dirty {
 		u.dirty[id] = 0
 	}
+	// The logout request may have failed, leaving the cookie valid.
+	if err := ctx.LocalStorage().Get(signedOutKey, &u.signedOut); err != nil {
+		app.Log(err)
+	}
 
 	if depth := app.Window().Get("history").Get("state"); depth.Truthy() && depth.Get(backStateKey).Truthy() {
 		// A reload left the entries of the previous run; go back to the app's own.
@@ -121,6 +127,18 @@ func (u *ui) OnMount(ctx app.Context) {
 			return nil
 		}))
 	}
+	// Save at once when the page is hidden or closed: the browser may freeze
+	// or discard it before the debounce fires. This runs in the event
+	// handler, not Dispatch, which would run too late. Wasm runs one
+	// goroutine at a time.
+	flush := app.FuncOf(func(app.Value, []app.Value) any {
+		if app.Window().Get("document").Get("visibilityState").String() == "hidden" && u.seq != u.saved {
+			u.persist()
+		}
+		return nil
+	})
+	app.Window().Get("document").Call("addEventListener", "visibilitychange", flush)
+	app.Window().Call("addEventListener", "pagehide", flush)
 	u.sync(ctx)
 }
 
@@ -655,6 +673,7 @@ func (u *ui) signIn(ctx app.Context, e app.Event) {
 				u.loginErr = "Can't reach the server. Try again."
 			default:
 				u.signedOut = false
+				ctx.LocalStorage().Del(signedOutKey)
 				app.Window().GetElementByID("login-password").Set("value", "")
 				u.sync(ctx)
 			}
@@ -681,6 +700,9 @@ func (u *ui) signOut(app.Context, app.Event) {
 			u.syncGen++
 			u.syncing, u.again = false, false
 			u.ctx.LocalStorage().Del(storageKey)
+			if err := u.ctx.LocalStorage().Set(signedOutKey, true); err != nil {
+				app.Log(err)
+			}
 			u.open("")
 			u.signedOut = true
 		},
@@ -1064,13 +1086,42 @@ func (u *ui) changed(id string) {
 	})
 }
 
-// persist stores the notes and pending changes in the browser.
+// persist stores the notes and pending changes in the browser, keeping
+// another tab's, see withPending.
 func (u *ui) persist() {
-	c := cache{Notes: u.notes, Dirty: slices.Collect(maps.Keys(u.dirty)), Deleted: u.deleted}
+	u.saved = u.seq
+	var stored cache
+	if err := u.ctx.LocalStorage().Get(storageKey, &stored); err != nil {
+		app.Log(err)
+	}
+	c := withPending(cache{Notes: u.notes, Dirty: slices.Collect(maps.Keys(u.dirty)), Deleted: u.deleted}, stored)
 	if err := u.ctx.LocalStorage().Set(storageKey, c); err != nil {
 		app.Log(err)
 		u.status = "Could not save on this device."
 	}
+}
+
+// withPending adds to c the pending notes another tab stored that are newer
+// than c's copy, so closing that tab before it synced loses nothing: they
+// sync on the next start. This tab does not push them itself, as their tab
+// may still change them.
+func withPending(c, stored cache) cache {
+	c.Notes = slices.Clone(c.Notes)
+	for _, n := range stored.Notes {
+		if !slices.Contains(stored.Dirty, n.ID) || slices.Contains(c.Dirty, n.ID) || slices.Contains(c.Deleted, n.ID) {
+			continue
+		}
+		switch i := slices.IndexFunc(c.Notes, func(m note.Note) bool { return m.ID == n.ID }); {
+		case i < 0:
+			c.Notes = append(c.Notes, n)
+		case n.Updated.After(c.Notes[i].Updated):
+			c.Notes[i] = n
+		default: // synced since, or older than this tab's
+			continue
+		}
+		c.Dirty = append(c.Dirty, n.ID)
+	}
+	return c
 }
 
 // sync pushes pending changes and then adopts the backend's notes. Only one

@@ -27,6 +27,15 @@ func TestRender(t *testing.T) {
 	if got := render(`<script>x</script>`, ""); strings.Contains(got, "<script>") {
 		t.Errorf("render() keeps raw HTML: %s", got)
 	}
+	for _, src := range []string{
+		"[x](javascript:alert(1))", "[x](JavaScript:alert(1))", "[x](vbscript:x)", "[x](data:text/html,<b>)",
+		"![x](javascript:alert(1))", "<javascript:alert(1)>",
+	} {
+		if got := strings.ToLower(render(src, "")); strings.Contains(got, `href="javascript`) ||
+			strings.Contains(got, `src="javascript`) || strings.Contains(got, `="vbscript`) || strings.Contains(got, `="data:text`) {
+			t.Errorf("render(%q) keeps a script link: %s", src, got)
+		}
+	}
 }
 
 func TestToggle(t *testing.T) {

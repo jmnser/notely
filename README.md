@@ -46,7 +46,7 @@ Notes are listed in their spaces; `enter`, `←` and `→` fold spaces. Notes op
 
 ```sh
 task image VERSION=v1.2.3
-docker run -d --name notely -p 8000:8000 -v notely:/data notely:v1.2.3
+docker run -d --name notely --stop-timeout 70 -p 8000:8000 -v notely:/data notely:v1.2.3
 ```
 
 Releases push it for `linux/amd64` and `linux/arm64` to `docker.io/<DOCKERHUB_USERNAME>/notely`, tagged with the version (tags are immutable, so there is no `latest`). The release workflow needs the repository variable `DOCKERHUB_USERNAME` and the secret `DOCKERHUB_TOKEN`, a Docker Hub access token with read and write access.
@@ -73,6 +73,8 @@ UserNS=keep-id:uid=65532,gid=65532
 Volume=/data/notely:/data
 PublishPort=127.0.0.1:8000:8000
 Exec=-addr=:8000 -data=/data -base=/notely
+# Time for the last git backup on stop, which may take a minute.
+StopTimeout=70
 
 [Service]
 Restart=always
@@ -89,7 +91,7 @@ tailscale funnel --bg --set-path=/notely http://127.0.0.1:8000/notely
 
 ## Sign-on
 
-On first start `notely-server` creates `<data>/.users.json` with the user `joe`. Add or change users there, then restart, with hashes from:
+On first start `notely-server` creates `<data>/.users.json` with the user `joe` and a random password, which it logs once (`journalctl --user -u notely` or `docker logs notely`). Change it, and add users, there, then restart, with hashes from:
 
 ```sh
 echo -n 'new password' | notely-server -hash
@@ -103,4 +105,4 @@ In edit mode, the image button or pasting an image uploads it and inserts `![nam
 
 ## Git backup
 
-Each user can push the notes to their own repository every `-sync-interval` (default 1h): open **Git backup** at the bottom of the sidebar and enter the repository URL, branch and a token. For GitHub, create a fine-grained token for that repository only with _Contents: read and write_. The token is stored in `<data>/.sync/<user>/token` on the server, never in git. See [design.md](design.md#git-backup).
+Each user can push the notes to their own repository every `-sync-interval` (default 1h): open **Git backup** at the bottom of the sidebar and enter the repository URL, branch and a token. For GitHub, create a fine-grained token for that repository only with _Contents: read and write_. The token is stored in `<data>/.sync/<user>/token` on the server, never in git. Repositories on loopback or link-local addresses are refused; LAN addresses work. See [design.md](design.md#git-backup).

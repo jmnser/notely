@@ -9,7 +9,9 @@ import (
 	"fmt"
 	"io/fs"
 	"log"
+	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"os"
 	"path"
@@ -17,6 +19,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/go-git/go-git/v5"
@@ -24,6 +27,7 @@ import (
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/go-git/go-git/v5/plumbing/transport"
+	"github.com/go-git/go-git/v5/plumbing/transport/client"
 	githttp "github.com/go-git/go-git/v5/plumbing/transport/http"
 )
 
@@ -45,6 +49,37 @@ func (c syncSettings) validate() error {
 	}
 	if err := plumbing.NewBranchReferenceName(c.Branch).Validate(); err != nil || c.Branch == "" {
 		return errors.New("invalid branch name")
+	}
+	return nil
+}
+
+// installTransport makes go-git, process-wide, use backupTransport for https.
+var installTransport sync.Once
+
+// backupTransport is an HTTPS transport that refuses loopback, link-local
+// (such as cloud metadata at 169.254.169.254) and multicast addresses, so a
+// user cannot point the backup at the server's own services. It checks the
+// address dialed, after DNS resolution. Private LAN addresses stay allowed,
+// for self-hosted git servers.
+func backupTransport() *http.Transport {
+	t := http.DefaultTransport.(*http.Transport).Clone() //nolint:forcetypeassert // documented type
+	d := &net.Dialer{Timeout: 30 * time.Second, KeepAlive: 30 * time.Second, Control: refuseInternal}
+	t.DialContext = d.DialContext
+	return t
+}
+
+func refuseInternal(_, address string, _ syscall.RawConn) error {
+	host, _, err := net.SplitHostPort(address)
+	if err != nil {
+		return err
+	}
+	ip, err := netip.ParseAddr(host)
+	if err != nil {
+		return err
+	}
+	if ip = ip.Unmap(); ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() ||
+		ip.IsInterfaceLocalMulticast() || ip.IsMulticast() || ip.IsUnspecified() {
+		return fmt.Errorf("git backup to %s refused: loopback and link-local addresses are not allowed", ip)
 	}
 	return nil
 }
@@ -73,6 +108,9 @@ type syncer struct {
 }
 
 func newSyncer(notes string, users map[string]bool) *syncer {
+	installTransport.Do(func() {
+		client.InstallProtocol("https", githttp.NewClient(&http.Client{Transport: backupTransport()}))
+	})
 	return &syncer{
 		notes:  notes,
 		users:  users,
@@ -352,6 +390,26 @@ func openRepo(dir, remote string) (*git.Repository, error) {
 	return repo, repo.SetConfig(cfg)
 }
 
+// copyFile copies rel of from to out of to, unless out holds it already.
+func copyFile(from, to *os.Root, rel, out string) error {
+	if out != rel {
+		if _, err := to.Stat(out); err == nil {
+			return nil // an image's name is its content
+		}
+	}
+	data, err := from.ReadFile(rel)
+	if err != nil {
+		return err
+	}
+	if old, err := to.ReadFile(out); err == nil && bytes.Equal(old, data) {
+		return nil
+	}
+	if err := to.MkdirAll(path.Dir(out), 0o700); err != nil {
+		return err
+	}
+	return to.WriteFile(out, data, 0o600)
+}
+
 // mirror makes dst hold exactly the .md files of src and its images, which
 // .images/ holds and images/ gets. Other dot entries and symbolic links are
 // skipped; os.Root keeps all access inside both trees.
@@ -371,6 +429,8 @@ func mirror(src, dst string) error {
 	err = fs.WalkDir(from.FS(), ".", func(rel string, d fs.DirEntry, err error) error {
 		out := rel
 		switch {
+		case errors.Is(err, fs.ErrNotExist): // moved by an edit meanwhile; the next sync has it
+			return nil
 		case err != nil:
 			return err
 		case rel == imageDir && d.IsDir():
@@ -393,22 +453,12 @@ func mirror(src, dst string) error {
 			return nil
 		}
 		files[out] = true
-		if out != rel {
-			if _, err := to.Stat(out); err == nil {
-				return nil // an image's name is its content
-			}
-		}
-		data, err := from.ReadFile(rel)
-		if err != nil {
+		if err := copyFile(from, to, rel, out); errors.Is(err, fs.ErrNotExist) {
+			delete(files, out) // moved by an edit meanwhile; the next sync has it
+		} else if err != nil {
 			return err
 		}
-		if old, err := to.ReadFile(out); err == nil && bytes.Equal(old, data) {
-			return nil
-		}
-		if err := to.MkdirAll(path.Dir(out), 0o700); err != nil {
-			return err
-		}
-		return to.WriteFile(out, data, 0o600)
+		return nil
 	})
 	if err != nil {
 		return err

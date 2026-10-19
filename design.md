@@ -9,7 +9,7 @@ browser (PWA, wasm) ──► notely-server ──► notes/*.md
 
 ## Principles
 
-1. **Portable, no cgo (top priority).** Everything builds with `CGO_ENABLED=0` for every Go target, including `js/wasm`. The Taskfile and CI set `CGO_ENABLED=0`; GoReleaser builds with it. Only the optional race-detector test (`task test:race`, a CI step) enables cgo, because Go's race detector needs it on Linux. New dependencies must not need cgo: check with `go list -deps -f '{{if .CgoFiles}}{{.ImportPath}}{{end}}' ./...`, which must print nothing.
+1. **Portable, no cgo (top priority).** Everything builds with `CGO_ENABLED=0` for every Go target, including `js/wasm`. The Taskfile and CI set `CGO_ENABLED=0`; GoReleaser builds with it. Only the optional race-detector test (`task test:race`, a CI step) enables cgo, because Go's race detector needs it on Linux. New dependencies must not need cgo: check with `CGO_ENABLED=0 go list -deps -f '{{if .CgoFiles}}{{.ImportPath}}{{end}}' ./...`, which must print nothing (CI runs it).
 2. **Self-contained and offline.** Binaries embed everything the browser needs; no CDNs, web fonts or third-party requests.
 
 ## Backend: `internal/api`
@@ -19,24 +19,26 @@ Imported only by files built with `!wasm`, so none of it reaches the browser; CI
 
 - API: `GET /api/notes`, `PUT /api/notes/{id}` (create or replace), `DELETE /api/notes/{id}`, `GET /healthz` (also outside `-base`); sign-on: `POST /api/login`, `POST /api/logout`, `GET /api/session`.
 - Both writes are idempotent, so the frontend can safely retry them.
-- Notes live in memory; each one is also a Markdown file, written atomically (temp file + rename) on every change. A failed write leaves the note unchanged.
+- Notes live in memory; each one is also a Markdown file, written atomically and durably (temp file, fsync, rename, fsync of the directory) on every change. A failed write leaves the note unchanged.
+- `PUT` cleans the space path as the apps do and rejects titles over 200 characters, spaces over 1000, bodies over 100 000 and control characters in titles and spaces.
 
 ### Sign-on
 
-- Users live in `<data>/.users.json` (`-users` overrides), a JSON object of user name → argon2id hash in PHC format. A missing file is created with the default user `joe`. All users share the same notes. The file is read on start; restart after changing it.
+- Users live in `<data>/.users.json` (`-users` overrides), a JSON object of user name → argon2id hash in PHC format. A missing file is created with the default user `joe` and a random password, logged once. All users share the same notes. The file is read on start; restart after changing it.
 - New hashes: `echo -n 'password' | notely-server -hash` (argon2id, 64 MiB, 3 passes, 1 thread, random 16-byte salt). Hashes with other parameters are accepted within bounds.
 - `POST /api/login` checks the password in constant time and sets a random session token as cookie: `HttpOnly`, `SameSite=Strict`, `Secure` behind HTTPS (or `X-Forwarded-Proto: https` from a proxy in front), valid 30 days. Every other `/api/` call needs it, else 401.
-- Brute force: at most two password checks run at once (each takes 64 MiB), failures wait one second, unknown users cost a hash check like known ones.
+- Brute force: at most two password checks run at once (each takes 64 MiB); a sign-in waits up to 5 s for one, else gets 503. Failures wait one second, unknown users cost a hash check like known ones. After 5 failures for a user name, its sign-ins are refused with 429 for a doubling time up to a minute, so guessing a password takes about one try a minute; a success resets it. This counts per user name, not per address, as behind a proxy all clients share one, so an attacker can keep that user from signing in meanwhile; existing sessions keep working.
+- The cookie's path stays `/` under `-base`, as proxies may serve the app under another path than the server's.
 - Sessions are kept in memory: restarting the backend signs everyone out.
 
-The frontend shows a sign-in screen on any 401. Local edits made meanwhile stay pending and sync after signing in. Signing out removes the notes from the device.
+The frontend shows a sign-in screen on any 401. Local edits made meanwhile stay pending and sync after signing in. Signing out removes the notes from the device and is remembered there, so a reload does not sign in again with the cookie if the logout request failed.
 
 ### Git backup
 
 Each user can push the notes to a git repository of their own, set in the app's **Git backup** dialog: repository (`https://` only, no credentials in the URL), branch and token. The API is `GET/PUT/DELETE /api/sync` and `POST /api/sync/run`.
 
 - State per user lives in `<data>/.sync/<user>/`: `settings.json` (repository, branch), `token` (mode 0600) and `repo/`, a clone. The token never leaves this file: it is not committed and not returned by the API, which only reports whether one is set.
-- A sync (go-git, pure Go) fetches the branch, mirrors the notes' `.md` files into the clone, commits if anything changed and pushes without force. Dot files and symbolic links are never copied; copying and the per-user files go through `os.Root`, and the clone lives under a validated user name. A sync times out after 5 minutes. A stored token is only reused for the host it was saved for.
+- A sync (go-git, pure Go) fetches the branch, mirrors the notes' `.md` files into the clone, commits if anything changed and pushes without force. Dot files and symbolic links are never copied; copying and the per-user files go through `os.Root`, and the clone lives under a validated user name. A sync times out after 5 minutes. A stored token is only reused for the host it was saved for. Repositories resolving to loopback, link-local (such as cloud metadata) or multicast addresses are refused when connecting, so users cannot reach the server's own services; LAN addresses stay allowed for self-hosted git. Files an edit moves during the copy are left for the next sync. On stop, the last sync gets a minute, so give the container a longer stop timeout than the default 10 s; a server that never started serving skips it.
 - One-way: the app wins. Changes made in the repository are replaced by the next sync, but stay in its history.
 - Syncs run every `-sync-interval` (default 1h), on **Sync now**, after saving the settings and once on shutdown. One sync runs at a time; the last result per user is shown in the dialog.
 - For GitHub use a fine-grained token limited to the one repository with *Contents: read and write*.
@@ -66,7 +68,7 @@ updated: 2026-10-15T09:12:00.123Z
 - Name collisions, compared case-insensitively, get `-2`, `-3`, …; foreign files are never overwritten.
 - The front matter holds all fields, so the path is only derived: renaming a note or changing its space moves its file, and an emptied space directory is removed.
 - The body follows the front matter byte for byte.
-- On start, files and directories starting with `.` (e.g. `.git`) are ignored and files without a valid `id` are skipped with a log line, so the directory can be a git repository.
+- On start, files and directories starting with `.` (e.g. `.git`) are ignored and files without a valid `id` are skipped with a log line, so the directory can be a git repository. Of two files with the same `id`, left by a crash while moving a note, the older is removed, so deleting the note does not bring it back.
 - The server stamps `updated`; concurrent edits resolve as last write wins.
 
 ### Images
@@ -87,7 +89,7 @@ Size: the wasm calls the backend with the browser's `fetch`, not `net/http`, whi
 The app is local first:
 
 1. Every change (create, edit, pin, delete) is applied to the in-memory list at once and marked pending.
-2. When changes pause for 500 ms, the state is written to `localStorage` and synced.
+2. When changes pause for 500 ms, the state is written to `localStorage` and synced; when the page is hidden or closed, it is written at once. Saving keeps pending notes another tab stored that are newer than this tab's copy, so they sync on the next start rather than being lost; this tab does not push them, as their tab may still change them.
 3. A sync pushes pending notes and deletions, fetches the backend's list and merges it: pending local changes win, everything else comes from the backend.
 4. Syncs also run on start, on window focus, when the browser comes back online and every 30 s after a failure.
 
@@ -129,7 +131,8 @@ Rendering stays in the browser so the Go build keeps no cgo or headless browser 
 A [Bubble Tea](https://github.com/charmbracelet/bubbletea) v2 client for the same API, local first like the web app and sharing its merge (`note.Merge`).
 
 - Configuration lives in `~/.config/notely/config.toml` (`$XDG_CONFIG_HOME` is honoured on every OS, `$NOTELY_CONFIG` overrides the path): server URL, user and `password_command`. Without a session the client runs that command with the terminal handed over, so a keychain can ask to be unlocked, and signs in with its first line; once per sign-out, then it shows the sign-in screen. `-init` writes the file with the OS keychain's lookup (`secret-tool`, libsecret, on Linux; `security` on macOS); user names are checked against the server's pattern, as they go into that shell command.
-- State per server lives next to it in `<hash of the URL>.json` (mode 0600): session token, notes and pending changes. It is saved atomically on every change. A lock file next to it, holding the client's process ID, keeps a second client for the same server from overwriting it; a lock whose process is gone is taken over. Closing the terminal (SIGHUP) or SIGTERM quits cleanly. State of v0.4 and v0.5, in the OS config directory, moves there on start.
+- The password command only runs when the server is the configured `server.url`; `-server` elsewhere asks for the password.
+- State per server lives in `~/.config/notely/<hash of the URL>.json` (mode 0600), also when `$NOTELY_CONFIG` moves the config: session token, notes and pending changes. It is saved atomically and durably on every change. An OS lock on `<state>.lock` (`flock`, `LockFileEx`), which the OS releases when the process ends, keeps a second client for the same server from overwriting it; the file holds the process ID for the error. Closing the terminal (SIGHUP) or SIGTERM quits cleanly. Titles over the server's 200 characters are refused when entered; a note the server rejects is named in the status. State of v0.4 and v0.5, in the OS config directory, moves there on start.
 - The list is the space tree of the web app's sidebar (`note.Tree`): subspaces, then notes, each space with its note count. `enter` folds a space or opens a note, `←`/`→` fold and go to the parent; folds last for the run. Search keeps the tree, showing the matching notes with their spaces open.
 - Syncs run on start, after each change, on terminal focus and every 30 s.
 - Notes render with Glamour; editing opens the body in `$VISUAL`, `$EDITOR` or `vi` (`notepad` on Windows). An edit to a note deleted elsewhere meanwhile restores it. Search matches every word in title, space and body.
@@ -169,6 +172,9 @@ Material Design 3 is implemented in plain CSS (`web/app.css`: M3 color, type, sh
 - Git backup is one-way; edits made in the repository are not imported.
 - `notely` runs once per server and user account at a time.
 - Run behind HTTPS beyond localhost: over plain HTTP the session cookie and password travel unencrypted.
+- Signing out leaves loaded images in the browser's cache, which keeps them for offline use.
+- The browser's `localStorage` holds about 5 MB, which caps the web app's offline copy; beyond it the app shows "Could not save on this device."
+- Images from other sites do not show in notes: the CSP allows images only from the server itself (`img-src 'self' data: blob:`), so notes cannot make readers' browsers request other sites.
 - Last write wins: an offline edit can overwrite a newer one, or bring back a note deleted elsewhere.
 - All notes are held in memory, fine for thousands of notes, not for millions.
 - Files changed on disk while the backend runs are not picked up until restart, and are overwritten by the next edit in the app.
