@@ -33,6 +33,9 @@ var clientID = rand.Text()
 // errSignedOut is returned when the backend needs a sign-on.
 var errSignedOut = errors.New("signed out")
 
+// errNotFound is returned when the backend does not have what was asked for.
+var errNotFound = errors.New("not found")
+
 // badRequest is the backend's explanation of a rejected request.
 type badRequest string
 
@@ -79,12 +82,32 @@ func exchange(push []note.Note, deleted []string) ([]note.Note, map[string]error
 	return notes, rejected, call(get, "/api/notes", nil, &notes)
 }
 
-// uploadImage stores an image file (a JavaScript Blob) on the backend and
-// returns its path for Markdown, /images/<name>.
-func uploadImage(file app.Value) (string, error) {
-	var out struct{ Path string }
-	err := send(post, "/api/images", file, file.Get("type").String(), uploadTimeout, &out)
-	return out.Path, err
+// uploadImage stores an image file (a JavaScript Blob) next to note n on the
+// backend, pushing n first if the backend does not know it yet, and returns
+// the image's name, which n references it by.
+func uploadImage(n note.Note, file app.Value) (string, error) {
+	var out struct{ Name string }
+	upload := func() error {
+		return send(post, "/api/notes/"+n.ID+"/images", file, file.Get("type").String(), uploadTimeout, &out)
+	}
+	err := upload()
+	if errors.Is(err, errNotFound) {
+		if err = call(put, "/api/notes/"+n.ID, n, nil); err == nil {
+			err = upload()
+		}
+	}
+	return out.Name, err
+}
+
+// listImages returns the names of the images next to note id; none if the
+// backend does not have the note yet.
+func listImages(id string) ([]string, error) {
+	var names []string
+	err := call(get, "/api/notes/"+id+"/images", nil, &names)
+	if errors.Is(err, errNotFound) {
+		return nil, nil
+	}
+	return names, err
 }
 
 // rootPrefix is the path the app is served under, without a trailing slash.
@@ -132,6 +155,8 @@ func send(method, path string, body any, contentType string, limit time.Duration
 		return errSignedOut
 	case status == 400:
 		return badRequest(strings.TrimSpace(text.String()))
+	case status == 404:
+		return fmt.Errorf("%s %s: %w", method, path, errNotFound)
 	case status >= 300:
 		return fmt.Errorf("%s %s: %d %s", method, path, status, res.Get("statusText").String())
 	}

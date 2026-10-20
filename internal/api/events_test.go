@@ -53,7 +53,7 @@ func TestEvents(t *testing.T) {
 		t.Fatal(err)
 	}
 	ev := newEvents()
-	h := newHandler(s, ev)
+	h := newHandler(only(s), ev)
 	var signedOn atomic.Bool
 	signedOn.Store(true)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -78,7 +78,12 @@ func TestEvents(t *testing.T) {
 	if l := next(200 * time.Millisecond); l != "timeout" {
 		t.Fatalf("told about its own change: %q", l)
 	}
+	others, nextOther := stream(t, srv, "?user=bob")
+	defer others.Body.Close() //nolint:errcheck // test
 	put("other")
+	if l := nextOther(200 * time.Millisecond); l != "timeout" {
+		t.Fatalf("other user told: %q", l)
+	}
 	if l := next(5 * time.Second); l != "data: changed" {
 		t.Fatalf("after a change: %q", l)
 	}

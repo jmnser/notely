@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -16,10 +17,12 @@ import (
 // md renders GitHub Flavored Markdown. Raw HTML in notes is not rendered.
 var md = goldmark.New(goldmark.WithExtensions(extension.GFM))
 
+// imageLink finds links to a note's images: by name, relative to the note, or
+// as /images/<name>, as notes referenced them before images moved next to them.
+var imageLink = regexp.MustCompile(`<(img src|a href)="(/images/)?([0-9a-f]{32}\.(?:png|jpg|gif|webp))"`)
+
 const (
 	checkbox     = ` disabled="" type="checkbox"`
-	imageSrc     = `<img src="/images/`
-	imageHref    = `<a href="/images/`
 	mermaidStart = `<pre><code class="language-mermaid">`
 	mermaidEnd   = `</code></pre>`
 )
@@ -27,18 +30,25 @@ const (
 // render converts markdown to HTML with a single root element. Task list
 // checkboxes are enabled and numbered in data-task, in document order.
 // Mermaid code blocks become <pre class="mermaid"> for Mermaid to draw.
-// Uploaded images, /images/<name>, load from the API under prefix.
-func render(src, prefix string) string {
+// Images of note id load from the API under prefix.
+func render(src, prefix, id string) string {
 	var buf bytes.Buffer
 	if err := md.Convert([]byte(src), &buf); err != nil {
 		return "<div></div>"
 	}
 	var out strings.Builder
 	out.WriteString(`<div class="markdown">`)
-	html := strings.NewReplacer(
-		imageSrc, `<img loading="lazy" src="`+prefix+`/api/images/`,
-		imageHref, `<a href="`+prefix+`/api/images/`,
-	).Replace(buf.String())
+	html := imageLink.ReplaceAllStringFunc(buf.String(), func(link string) string {
+		m := imageLink.FindStringSubmatch(link)
+		url := imageBase(prefix, id) + m[3]
+		if m[2] != "" {
+			url = prefix + "/api/images/" + m[3] // found in any of the user's directories
+		}
+		if m[1] == "img src" {
+			return `<img loading="lazy" title="` + m[3] + `" src="` + url + `"`
+		}
+		return `<a href="` + url + `"`
+	})
 	rest := mermaidBlocks(html)
 	for i := 0; ; i++ {
 		before, after, ok := strings.Cut(rest, checkbox)
@@ -220,6 +230,12 @@ func itemEnd(src string, li ast.Node, start, col int) int {
 // markers of s.
 func indentOf(s string) int {
 	return len(s) - len(strings.TrimLeft(s, " \t>"))
+}
+
+// imageBase is the URL path the images next to note id are served under,
+// below prefix.
+func imageBase(prefix, id string) string {
+	return prefix + "/api/notes/" + id + "/images/"
 }
 
 // mermaidBlocks marks fenced mermaid code blocks in html for Mermaid. Their

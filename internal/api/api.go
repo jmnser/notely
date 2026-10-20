@@ -21,16 +21,35 @@ const (
 
 var validID = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
 
-func newHandler(s *store, ev *events) http.Handler {
+// newHandler serves the notes API on the store storeOf returns for a request:
+// the signed-on user's.
+func newHandler(storeOf func(*http.Request) *store, ev *events) http.Handler {
 	mux := http.NewServeMux()
+	handle := func(pattern string, h func(*store, http.ResponseWriter, *http.Request)) {
+		mux.HandleFunc(pattern, func(w http.ResponseWriter, r *http.Request) {
+			s := storeOf(r)
+			if s == nil {
+				http.Error(w, "signed out", http.StatusUnauthorized)
+				return
+			}
+			h(s, w, r)
+		})
+	}
 	mux.HandleFunc("GET /api/events", ev.serve)
+	handle("POST /api/notes/{id}/images", (*store).uploadImage)
+	handle("GET /api/notes/{id}/images", (*store).listImages)
+	handle("GET /api/notes/{id}/images/{name}", (*store).serveImage)
+	// The former layout's image API, for /images/<name> references and apps
+	// still cached in browsers.
+	handle("POST /api/images", (*store).uploadImage)
+	handle("GET /api/images/{name}", (*store).serveImage)
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	})
-	mux.HandleFunc("GET /api/notes", func(w http.ResponseWriter, _ *http.Request) {
+	handle("GET /api/notes", func(s *store, w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, s.list())
 	})
-	mux.HandleFunc("PUT /api/notes/{id}", func(w http.ResponseWriter, r *http.Request) {
+	handle("PUT /api/notes/{id}", func(s *store, w http.ResponseWriter, r *http.Request) {
 		var n note.Note
 		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxBody)).Decode(&n); err != nil {
 			http.Error(w, "invalid note", http.StatusBadRequest)
@@ -55,10 +74,10 @@ func newHandler(s *store, ev *events) http.Handler {
 			serverError(w, err)
 			return
 		}
-		ev.notify(r.Header.Get(clientHeader))
+		ev.notify(userOf(r), r.Header.Get(clientHeader))
 		writeJSON(w, n)
 	})
-	mux.HandleFunc("DELETE /api/notes/{id}", func(w http.ResponseWriter, r *http.Request) {
+	handle("DELETE /api/notes/{id}", func(s *store, w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
 		if !validID.MatchString(id) {
 			http.Error(w, "invalid id", http.StatusBadRequest)
@@ -68,7 +87,7 @@ func newHandler(s *store, ev *events) http.Handler {
 			serverError(w, err)
 			return
 		}
-		ev.notify(r.Header.Get(clientHeader))
+		ev.notify(userOf(r), r.Header.Get(clientHeader))
 		w.WriteHeader(http.StatusNoContent)
 	})
 	return mux

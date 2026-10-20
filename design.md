@@ -17,14 +17,15 @@ browser (PWA, wasm) ──► notely-server ──► notes/*.md
 Imported only by files built with `!wasm`, so none of it reaches the browser; CI fails if the wasm imports it or grows beyond 11 MB.
 
 
-- API: `GET /api/notes`, `PUT /api/notes/{id}` (create or replace), `DELETE /api/notes/{id}`, `GET /api/events` (change events), `GET /healthz` (also outside `-base`); sign-on: `POST /api/login`, `POST /api/logout`, `GET /api/session`.
+- API: `GET /api/notes`, `PUT /api/notes/{id}` (create or replace), `DELETE /api/notes/{id}`, `GET`/`POST /api/notes/{id}/images`, `GET /api/notes/{id}/images/{name}`, `GET /api/events` (change events), `GET /healthz` (also outside `-base`); sign-on: `POST /api/login`, `POST /api/logout`, `GET /api/session`.
 - Both writes are idempotent, so the frontend can safely retry them.
-- Notes live in memory; each one is also a Markdown file, written atomically and durably (temp file, fsync, rename, fsync of the directory) on every change. A failed write leaves the note unchanged.
+- Each user has a directory, `<data>/users/<user>/`, with all their files: notes in their space directories, images next to them and the git backup state in `.sync/`. A signed-on user only reaches their own; requests name no user. Notes live in memory; each one is also a Markdown file, written atomically and durably (temp file, fsync, rename, fsync of the directory) on every change. A failed write leaves the note unchanged.
 - `PUT` cleans the space path as the apps do and rejects titles over 200 characters, spaces over 1000, bodies over 100 000 and control characters in titles and spaces.
 
 ### Sign-on
 
-- Users live in `<data>/.users.json` (`-users` overrides), a JSON object of user name → argon2id hash in PHC format. A missing file is created with the default user `joe` and a random password, logged once. All users share the same notes. The file is read on start; restart after changing it.
+- Users live in `<data>/.users.json` (`-users` overrides), a JSON object of user name → argon2id hash in PHC format. A missing file is created with the default user `joe` and a random password, logged once. User names are unique, also ignoring case, as they name directories. The file is read on start; restart after changing it.
+- Before v0.13.0 all users shared the notes in `<data>`, images in `<data>/.images` and backup state in `<data>/.sync/<user>`. On start every user gets a copy of the notes, as they all saw them, and their backup state moves to `users/<user>/.sync`; images are copied next to the notes referencing them as `/images/<name>`, which then reference them by name, and the others to each user's top directory. Only directories and `.md` files count as notes, so a users file in `<data>` stays. `<data>/.layout` records the migration, so a former space named `users` is migrated too, and every step can be repeated, so an interrupted migration continues on the next start.
 - New hashes: `echo -n 'password' | notely-server -hash` (argon2id, 64 MiB, 3 passes, 1 thread, random 16-byte salt). Hashes with other parameters are accepted within bounds.
 - `POST /api/login` checks the password in constant time and sets a random session token as cookie: `HttpOnly`, `SameSite=Strict`, `Secure` behind HTTPS (or `X-Forwarded-Proto: https` from a proxy in front), valid 30 days. Every other `/api/` call needs it, else 401.
 - Brute force: at most two password checks run at once (each takes 64 MiB); a sign-in waits up to 5 s for one, else gets 503. Failures wait one second, unknown users cost a hash check like known ones. After 5 failures for a user name, its sign-ins are refused with 429 for a doubling time up to a minute, so guessing a password takes about one try a minute; a success resets it. This counts per user name, not per address, as behind a proxy all clients share one, so an attacker can keep that user from signing in meanwhile; existing sessions keep working.
@@ -37,8 +38,8 @@ The frontend shows a sign-in screen on any 401. Local edits made meanwhile stay 
 
 Each user can push the notes to a git repository of their own, set in the app's **Git backup** dialog: repository (`https://` only, no credentials in the URL), branch and token. The API is `GET/PUT/DELETE /api/sync` and `POST /api/sync/run`.
 
-- State per user lives in `<data>/.sync/<user>/`: `settings.json` (repository, branch), `token` (mode 0600) and `repo/`, a clone. The token never leaves this file: it is not committed and not returned by the API, which only reports whether one is set.
-- A sync (go-git, pure Go) fetches the branch, mirrors the notes' `.md` files into the clone, commits if anything changed and pushes without force. Dot files and symbolic links are never copied; copying and the per-user files go through `os.Root`, and the clone lives under a validated user name. A sync times out after 5 minutes. A stored token is only reused for the host it was saved for. Repositories resolving to loopback, link-local (such as cloud metadata) or multicast addresses are refused when connecting, so users cannot reach the server's own services; LAN addresses stay allowed for self-hosted git. Files an edit moves during the copy are left for the next sync. On stop, the last sync gets a minute, so give the container a longer stop timeout than the default 10 s; a server that never started serving skips it.
+- State per user lives in `<data>/users/<user>/.sync/`: `settings.json` (repository, branch), `token` (mode 0600) and `repo/`, a clone. The token never leaves this file: it is not committed and not returned by the API, which only reports whether one is set.
+- A sync (go-git, pure Go) fetches the branch, mirrors the user's `.md` files and images into the clone, commits if anything changed and pushes without force. Dot files and symbolic links are never copied; copying and the per-user files go through `os.Root`, and the clone lives under a validated user name. A sync times out after 5 minutes. A stored token is only reused for the host it was saved for. Repositories resolving to loopback, link-local (such as cloud metadata) or multicast addresses are refused when connecting, so users cannot reach the server's own services; LAN addresses stay allowed for self-hosted git. Files an edit moves during the copy are left for the next sync. On stop, the last sync gets a minute, so give the container a longer stop timeout than the default 10 s; a server that never started serving skips it.
 - One-way: the app wins. Changes made in the repository are replaced by the next sync, but stay in its history.
 - Syncs run every `-sync-interval` (default 1h), on **Sync now**, after saving the settings and once on shutdown. One sync runs at a time; the last result per user is shown in the dialog.
 - For GitHub use a fine-grained token limited to the one repository with *Contents: read and write*.
@@ -73,9 +74,10 @@ updated: 2026-10-15T09:12:00.123Z
 
 ### Images
 
-- `POST /api/images` stores a PNG, JPEG, GIF or WebP image of up to 2 MiB as `<data>/.images/<hash>.<ext>`, named after the first 128 bits of its SHA-256, and answers `{"path": "/images/<name>"}`. The type comes from the content, not the request; SVG is refused because it can carry scripts. The same image is stored once. Larger images stored under the former 10 MiB limit are still served.
-- Notes reference it as `![alt](/images/<name>)`. The app loads it from `GET /api/images/<name>` (signed on, cached as immutable, `sandbox` CSP); the git backup copies `.images/` to `images/`, where GitHub resolves the same root-relative link. Links `[text](/images/<name>)` work the same.
-- In edit mode the image button or pasting an image uploads it and inserts the Markdown at the cursor.
+- `POST /api/notes/{id}/images` stores a PNG, JPEG, GIF or WebP image of up to 2 MiB next to note `id`, in its space directory, as `<hash>.<ext>`, named after the first 128 bits of its SHA-256, and answers `{"name": "<name>"}`. The type comes from the content, not the request; SVG is refused because it can carry scripts. An image is stored once per directory. Larger images stored under the former 10 MiB limit are still served.
+- Notes reference images by name, relative to themselves: `![alt](<name>)`, so GitHub resolves them in the git backup too. The app loads them from `GET /api/notes/{id}/images/<name>` (signed on, cached as immutable, `sandbox` CSP). References of the former form `/images/<name>` load from `GET /api/images/<name>`, which finds the image in any of the user's directories, and `POST /api/images` still stores in the top directory, for app versions cached in browsers. Links `[text](<name>)` work the same. When a note moves to another space, the images it references are copied along.
+- In edit mode the image button or pasting an image pushes the note, uploads the image and inserts the Markdown at the cursor. The gallery button lists the images in the note's space, `GET /api/notes/{id}/images`, with their names; selecting one inserts it.
+- Every Sunday at 23:00 server time (UTC in the container) the server deletes images no note in their directory references by name, nor any note as `/images/<name>`, unless stored within the last 7 days, for notes still waiting on an offline device; storing an image again restarts that. Directories left empty go too.
 
 ## Frontend: `cmd/notely-server`
 
@@ -167,8 +169,8 @@ Material Design 3 is implemented in plain CSS (`web/app.css`: M3 color, type, sh
 
 ## Limitations
 
-- Users share one set of notes; there are no per-user notes or permissions.
-- Images need the backend: uploading needs a connection, and images not yet loaded do not show offline. Images no note references are kept. Images are stored as uploaded, including metadata such as a photo's GPS location, and go into the git backup.
+- Notes cannot be shared between users.
+- Images need the backend: uploading needs a connection, and images not yet loaded do not show offline. An image used in several spaces is stored in each. Images are stored as uploaded, including metadata such as a photo's GPS location, and go into the git backup.
 - Sessions and the last git backup results are lost on backend restart.
 - Git backup is one-way; edits made in the repository are not imported.
 - `notely` runs once per server and user account at a time.

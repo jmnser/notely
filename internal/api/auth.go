@@ -1,6 +1,7 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/json"
@@ -11,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
@@ -53,11 +55,20 @@ func loadUsers(path string) (map[string]argonHash, error) {
 	if err := json.Unmarshal(data, &hashes); err != nil {
 		return nil, fmt.Errorf("read %s: %w", path, err)
 	}
+	if name, ok := duplicateKey(data); ok {
+		return nil, fmt.Errorf("read %s: user %s is listed twice", path, name)
+	}
 	users := map[string]argonHash{}
+	folded := map[string]string{}
 	for name, s := range hashes {
 		if !validID.MatchString(name) { // names become directory names
 			return nil, fmt.Errorf("read %s: user name %q: use letters, digits, - and _", path, name)
 		}
+		// Directories of names differing in case clash on some file systems.
+		if other, ok := folded[strings.ToLower(name)]; ok {
+			return nil, fmt.Errorf("read %s: user names %s and %s differ only in case", path, other, name)
+		}
+		folded[strings.ToLower(name)] = name
 		h, err := parseHash(s)
 		if err != nil {
 			return nil, fmt.Errorf("read %s: user %s: %w", path, name, err)
@@ -68,6 +79,32 @@ func loadUsers(path string) (map[string]argonHash, error) {
 		return nil, fmt.Errorf("read %s: no users", path)
 	}
 	return users, nil
+}
+
+// duplicateKey returns a key the JSON object data has twice; json.Unmarshal
+// keeps the last.
+func duplicateKey(data []byte) (string, bool) {
+	dec := json.NewDecoder(bytes.NewReader(data))
+	if _, err := dec.Token(); err != nil { // {
+		return "", false
+	}
+	seen := map[string]bool{}
+	for dec.More() {
+		t, err := dec.Token()
+		key, ok := t.(string)
+		if err != nil || !ok {
+			return "", false
+		}
+		if seen[key] {
+			return key, true
+		}
+		seen[key] = true
+		var skip json.RawMessage
+		if err := dec.Decode(&skip); err != nil {
+			return "", false
+		}
+	}
+	return "", false
 }
 
 type userKey struct{}
