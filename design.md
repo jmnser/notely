@@ -113,7 +113,7 @@ The back gesture (Android) and the browser's back button step back inside the ap
 
 In the editor, Enter in a list item (`-`, `*`, `+`, `1.`, `- [ ]`) starts the next item with the same indent and marker; numbers count up and task boxes start unchecked. Enter on an empty item removes its marker and ends the list. Shift+Enter inserts a plain newline. Edits go through `execCommand`, so undo keeps working.
 
-Task list checkboxes can be checked in view mode. Each rendered checkbox carries its index; clicking it flips `[ ]`/`[x]` at that task's source offset, taken from the goldmark syntax tree, so code blocks and nested lists stay intact. In a tight bullet list the toggled item then moves, with its nested lines, below the list's unchecked and plain items and above its checked ones, so the most recently checked come first. A line separates checked items from the items above them. Ordered and loose lists, and lists with an item whose text does not start on its marker's line, keep their order.
+Task list checkboxes can be checked in view mode. Each rendered checkbox carries its index; clicking it flips `[ ]`/`[x]` at that task's source offset, taken from the goldmark syntax tree, so code blocks and nested lists stay intact. The list is then grouped, items moving with their nested lines: unchecked and plain items first, then checked ones, each group in its order. A just checked item leads the checked ones, a just unchecked one ends the unchecked ones. Each position keeps its marker and blank lines, so numbering and spacing stay. A line separates the groups. Lists keep their order if an item's text does not start on its marker's line, or if items with several lines have markers of different widths.
 
 ### Android and offline
 

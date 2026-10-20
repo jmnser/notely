@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -64,8 +65,9 @@ func tasks(doc ast.Node) []*extast.TaskCheckBox {
 	return boxes
 }
 
-// toggle checks or unchecks task i of src. In a tight bullet list, the item then
-// moves below the list's other unchecked items, above its checked ones.
+// toggle checks or unchecks task i of src and groups its list: unchecked
+// and plain items first, then checked ones. A just checked item leads the
+// checked ones, a just unchecked one ends the unchecked ones.
 func toggle(src string, i int) (string, bool) {
 	boxes := tasks(md.Parser().Parse(text.NewReader([]byte(src))))
 	if i < 0 || i >= len(boxes) {
@@ -79,19 +81,29 @@ func toggle(src string, i int) (string, bool) {
 	if src[o+1] != ' ' {
 		mark = " "
 	}
-	return sortItem(src[:o+1]+mark+src[o+2:], boxes[i].Parent().Parent()), true
+	return group(src[:o+1]+mark+src[o+2:], boxes[i]), true
 }
 
-// sortItem moves list item li of src after the last of its siblings that is
-// not a checked task. Ordered and loose lists, and lists with items it cannot
-// delimit, stay put.
-func sortItem(src string, li ast.Node) string {
+// item is a list item's source: its marker, the rest, and blank lines after.
+type item struct {
+	marker, body, blank string
+}
+
+// group reorders the list of the just toggled box in src: unchecked and plain
+// items, then the toggled item, then the other checked items, each group in
+// its order. The toggled item thus ends the unchecked or leads the checked
+// ones. Each position keeps its marker and blank lines,
+// so numbering and spacing stay. Lists stay put if an item's text does not
+// start on its marker's line, or if items with several lines have markers of
+// different widths.
+func group(src string, box *extast.TaskCheckBox) string {
+	li := box.Parent().Parent()
 	list, ok := li.Parent().(*ast.List)
-	if _, isItem := li.(*ast.ListItem); !ok || !isItem || list.IsOrdered() || !list.IsTight {
+	if _, isItem := li.(*ast.ListItem); !ok || !isItem {
 		return src
 	}
-	var starts []int
-	from, after, col := 0, 0, 0
+	var starts, marks []int
+	col, cols := 0, map[int]bool{}
 	for c := list.FirstChild(); c != nil; c = c.NextSibling() {
 		first := c.FirstChild()
 		if first == nil || first.Lines().Len() == 0 ||
@@ -100,17 +112,13 @@ func sortItem(src string, li ast.Node) string {
 		}
 		o := first.Lines().At(0).Start
 		start := lineStart(src, o)
-		marker := strings.TrimLeft(src[start:o], " \t>")
-		if len(marker) < 2 || marker[0] != list.Marker || !strings.ContainsAny(marker[1:2], " \t") {
-			return src // the content does not start on the marker's line
+		m := markerEnd(src[start:o], list)
+		if m < 0 {
+			return src // the text does not start on the marker's line
 		}
-		if c == li {
-			from = len(starts)
-		} else if box, ok := first.FirstChild().(*extast.TaskCheckBox); !ok || !box.IsChecked {
-			after = len(starts) + 1
-		}
-		starts = append(starts, start)
+		starts, marks = append(starts, start), append(marks, start+m)
 		col = o - start
+		cols[col] = true
 	}
 	end := itemEnd(src, list.LastChild(), starts[len(starts)-1], col)
 	added := end == len(src) && !strings.HasSuffix(src, "\n")
@@ -119,19 +127,60 @@ func sortItem(src string, li ast.Node) string {
 		end++
 	}
 	starts = append(starts, end)
-	var out string
-	switch {
-	case after < from:
-		out = src[:starts[after]] + src[starts[from]:starts[from+1]] + src[starts[after]:starts[from]] + src[starts[from+1]:]
-	case after > from+1:
-		out = src[:starts[from]] + src[starts[from+1]:starts[after]] + src[starts[from]:starts[from+1]] + src[starts[after]:]
-	default:
-		out = src
+
+	var items []item
+	var unchecked, checked []string
+	var toggled string
+	quotes := strings.Count(src[starts[0]:marks[0]], ">")
+	i := 0
+	for c := list.FirstChild(); c != nil; c, i = c.NextSibling(), i+1 {
+		lines := strings.SplitAfter(src[marks[i]:starts[i+1]], "\n")
+		n := len(lines)
+		for n > 1 && strings.Count(lines[n-1], ">") <= quotes && strings.Trim(lines[n-1], " \t>\r\n") == "" {
+			n--
+		}
+		if n > 1 && len(cols) > 1 {
+			return src // its nested lines would need another indent elsewhere
+		}
+		body := strings.Join(lines[:n], "")
+		items = append(items, item{marker: src[starts[i]:marks[i]], body: body, blank: strings.Join(lines[n:], "")})
+		b, isTask := c.FirstChild().FirstChild().(*extast.TaskCheckBox)
+		switch {
+		case b == box:
+			toggled = body
+		case isTask && b.IsChecked:
+			checked = append(checked, body)
+		default:
+			unchecked = append(unchecked, body)
+		}
 	}
+	bodies := slices.Concat(unchecked, []string{toggled}, checked)
+	var out strings.Builder
+	out.WriteString(src[:starts[0]])
+	for i, it := range items {
+		out.WriteString(it.marker + bodies[i] + it.blank)
+	}
+	out.WriteString(src[end:])
 	if added {
-		out = strings.TrimSuffix(out, "\n")
+		return strings.TrimSuffix(out.String(), "\n")
 	}
-	return out
+	return out.String()
+}
+
+// markerEnd returns the length of line, the text before an item's content,
+// up to and including the item's list marker, or -1 if it does not end in one.
+func markerEnd(line string, list *ast.List) int {
+	rest := strings.TrimRight(line, " \t")
+	if rest == line || !strings.HasSuffix(rest, string(list.Marker)) {
+		return -1
+	}
+	if list.IsOrdered() {
+		num := strings.TrimRight(rest[:len(rest)-1], "0123456789")
+		if len(num) == len(rest)-1 {
+			return -1
+		}
+	}
+	return len(rest)
 }
 
 // lineStart returns the offset of the line containing offset o of src.
