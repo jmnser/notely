@@ -835,20 +835,6 @@ dialog p {
   height: auto;
   border-radius: 12px;
 }
-.asset-row .note {
-  display: grid;
-  grid-template-columns: 40px minmax(0, 1fr);
-  column-gap: 12px;
-  align-items: center;
-  padding-left: 16px;
-}
-.thumb {
-  grid-row: span 2;
-  width: 40px;
-  height: 40px;
-  object-fit: cover;
-  border-radius: 8px;
-}
 
 /* Compact window class */
 @media (max-width: 600px) {
