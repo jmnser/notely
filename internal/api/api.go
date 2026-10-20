@@ -54,6 +54,9 @@ func newHandler(viewOf func(*http.Request) *view, ev *events) http.Handler {
 	handle("POST /api/notes/{id}/images", func(v *view, w http.ResponseWriter, r *http.Request) {
 		if data, ok := readImage(w, r); ok {
 			name, err := v.putImage(r.PathValue("id"), data)
+			if err == nil {
+				v.own.listAsset(r, data, name) // also for notes in shared spaces
+			}
 			writeImage(w, r, name, err)
 		}
 	})
@@ -63,6 +66,11 @@ func newHandler(viewOf func(*http.Request) *view, ev *events) http.Handler {
 	// still cached in browsers.
 	own("POST /api/images", (*store).uploadImage)
 	own("GET /api/images/{name}", (*store).serveImage)
+	own("GET /api/assets", (*store).listAssets)
+	own("POST /api/assets", (*store).uploadAsset)
+	own("GET /api/assets/{path...}", (*store).serveAsset)
+	own("PUT /api/assets/{path...}", (*store).putAsset)
+	own("DELETE /api/assets/{path...}", (*store).removeAsset)
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	})

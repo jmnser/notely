@@ -310,6 +310,9 @@ func nextCleanup(now time.Time) time.Time {
 func (s *store) uploadImage(w http.ResponseWriter, r *http.Request) {
 	if data, ok := readImage(w, r); ok {
 		name, err := s.putImage(r.PathValue("id"), data)
+		if err == nil {
+			s.listAsset(r, data, name)
+		}
 		writeImage(w, r, name, err)
 	}
 }
@@ -361,15 +364,20 @@ func (s *store) serveImage(w http.ResponseWriter, r *http.Request) {
 		serverError(w, err)
 		return
 	}
-	defer f.Close() //nolint:errcheck
+	defer f.Close()                                               //nolint:errcheck
+	imageHeaders(w, name, "private, max-age=31536000, immutable") // the name is the content
+	http.ServeContent(w, r, name, time.Time{}, f)
+}
+
+// imageHeaders sets the headers of image name, served with cache control cache.
+func imageHeaders(w http.ResponseWriter, name, cache string) {
 	for typ, ext := range imageTypes {
 		if ext == path.Ext(name) {
 			w.Header().Set("Content-Type", typ)
 		}
 	}
-	w.Header().Set("Cache-Control", "private, max-age=31536000, immutable") // the name is the content
+	w.Header().Set("Cache-Control", cache)
 	w.Header().Set("Content-Security-Policy", "default-src 'none'; sandbox; frame-ancestors 'none'")
-	http.ServeContent(w, r, name, time.Time{}, f)
 }
 
 func (s *store) listImages(w http.ResponseWriter, r *http.Request) {

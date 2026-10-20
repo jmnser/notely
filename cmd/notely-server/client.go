@@ -99,7 +99,8 @@ func whoAmI() (me, error) {
 func uploadImage(n note.Note, file app.Value) (string, error) {
 	var out struct{ Name string }
 	upload := func() error {
-		return send(post, "/api/notes/"+n.ID+"/images", file, file.Get("type").String(), uploadTimeout, &out)
+		p := "/api/notes/" + n.ID + "/images?name=" + escape(file.Get("name").String())
+		return send(post, p, file, file.Get("type").String(), uploadTimeout, &out)
 	}
 	err := upload()
 	if errors.Is(err, errNotFound) {
@@ -119,6 +120,55 @@ func listImages(id string) ([]string, error) {
 		return nil, nil
 	}
 	return names, err
+}
+
+// asset is an image in the Assets space.
+type asset struct {
+	Name     string    `json:"name"` // DNS label and extension
+	Space    string    `json:"space"`
+	Uploaded time.Time `json:"uploaded"`
+	Version  string    `json:"version"`
+}
+
+// key is the asset's path under /api/assets/.
+func (a asset) key() string {
+	if a.Space == "" {
+		return a.Name
+	}
+	return a.Space + "/" + a.Name
+}
+
+// stem is the asset's name without its extension.
+func (a asset) stem() string {
+	stem, _, _ := strings.Cut(a.Name, ".") // labels hold no dots
+	return stem
+}
+
+// assetURL loads asset a; naming its version lets the browser cache it.
+func assetURL(a asset) string { return rootPrefix() + "/api/assets/" + a.key() + "?v=" + a.Version }
+
+func listAssets() ([]asset, error) {
+	var list []asset
+	return list, call(get, "/api/assets", nil, &list)
+}
+
+// uploadAsset stores an image file (a JavaScript File) in subspace space of
+// the Assets space, named after the file.
+func uploadAsset(file app.Value, space string) (asset, error) {
+	var a asset
+	q := "?name=" + escape(file.Get("name").String()) + "&space=" + escape(space)
+	return a, send(post, "/api/assets"+q, file, file.Get("type").String(), uploadTimeout, &a)
+}
+
+// putAsset renames asset a to name in subspace space.
+func putAsset(a asset, name, space string) (asset, error) {
+	var out asset
+	return out, call(put, "/api/assets/"+a.key(), map[string]string{"name": name, "space": space}, &out)
+}
+
+// escape encodes s for a URL query, keeping net/url out of the wasm binary.
+func escape(s string) string {
+	return app.Window().Call("encodeURIComponent", s).String()
 }
 
 // rootPrefix is the path the app is served under, without a trailing slash.

@@ -80,6 +80,15 @@ updated: 2026-10-15T09:12:00.123Z
 - In edit mode the image button or pasting an image pushes the note, uploads the image and inserts the Markdown at the cursor. The gallery button lists the images in the note's space, `GET /api/notes/{id}/images`, with their names; selecting one inserts it.
 - Every Sunday at 23:00 server time (UTC in the container) the server deletes images no note in their directory references by name, nor any note as `/images/<name>`, unless stored within the last 7 days, for notes still waiting on an offline device; storing an image again restarts that. Directories left empty go too.
 
+### Assets
+
+- The Assets space, below the other spaces, lists all images the user uploaded, to notes or to it, newest first, with one level of subspaces. They live in `<data>/users/<user>/.assets/[<subspace>/]<name>.<ext>`: the dot directory keeps them out of the notes, the image cleanup and the git backup.
+- Names and subspaces are DNS labels as in Kubernetes (RFC 1123): up to 63 lower case letters, digits and `-`, starting and ending with a letter or digit; the extension is not counted. Uploads are named after the file, lower-cased with other characters turned into `-` and cut to 63, `image` if nothing is left, with `-2`, `-3`, … on collisions within a subspace; the same image is listed once.
+- API: `GET /api/assets`, `POST /api/assets?name=<file>&space=<subspace>`, `GET`, `PUT` (`{"name", "space"}`: rename or move) and `DELETE /api/assets/[<subspace>/]<name>.<ext>`. Image uploads to notes take `?name=<file>` for their asset name. A subspace exists while it holds images.
+- Deleting an asset keeps the copies next to notes.
+- Assets carry a `version` (modification time and size, kept by renames). `?v=<version>` URLs are cached as immutable; others revalidate by that ETag, as a name can get other content.
+- Uploads compare the SHA-256 of the image with the assets', hashing each asset version once per server run.
+
 ## Frontend: `cmd/notely-server`
 
 One package built twice:
@@ -171,6 +180,7 @@ Material Design 3 is implemented in plain CSS (`web/app.css`: M3 color, type, sh
 ## Limitations
 
 - Only whole top-level spaces can be shared, not single notes.
+- An image uploaded to a note is stored twice: next to the note and in Assets. Assets need the backend and do not show offline.
 - Images need the backend: uploading needs a connection, and images not yet loaded do not show offline. An image used in several spaces is stored in each. Images are stored as uploaded, including metadata such as a photo's GPS location, and go into the git backup.
 - Sessions and the last git backup results are lost on backend restart.
 - Git backup is one-way; edits made in the repository are not imported.
