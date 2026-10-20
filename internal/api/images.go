@@ -159,24 +159,30 @@ func (s *store) images(id string) ([]string, error) {
 	return names, nil
 }
 
-// copyImages copies the images body references from directory from to to,
-// when a note moves there. Call with s.mu held.
-func (s *store) copyImages(body, from, to string) {
-	if from == to {
+// copyImages copies the images body references from directory from, of any
+// store, to directory to, relative to s.dir, when a note moves there. Call
+// with s.mu held.
+func (s *store) copyImages(from, body, to string) {
+	if filepath.Clean(from) == filepath.Join(s.dir, to) {
 		return
 	}
-	root, err := os.OpenRoot(s.dir)
-	if err != nil {
+	src, err := os.OpenRoot(from)
+	if errors.Is(err, fs.ErrNotExist) {
+		return
+	}
+	root, err2 := os.OpenRoot(s.dir)
+	if err = errors.Join(err, err2); err != nil {
 		log.Print(err)
 		return
 	}
+	defer src.Close()  //nolint:errcheck
 	defer root.Close() //nolint:errcheck
 	for _, name := range slices.Compact(slices.Sorted(slices.Values(imageRef.FindAllString(body, -1)))) {
-		src, dst := path.Join(filepath.ToSlash(from), name), path.Join(filepath.ToSlash(to), name)
+		dst := path.Join(filepath.ToSlash(to), name)
 		if _, err := root.Stat(dst); err == nil {
 			continue
 		}
-		data, err := root.ReadFile(src)
+		data, err := src.ReadFile(name)
 		if errors.Is(err, fs.ErrNotExist) {
 			continue
 		}
@@ -184,8 +190,24 @@ func (s *store) copyImages(body, from, to string) {
 			err = writeFile(root, dst, data)
 		}
 		if err != nil {
-			log.Printf("copy image %s: %v", src, err)
+			log.Printf("copy image %s: %v", filepath.Join(from, name), err)
 		}
+	}
+}
+
+// importImages copies the images body references from note id's directory in
+// store from to its directory in s, when the note moves between stores.
+func (s *store) importImages(id, body string, from *store) {
+	from.mu.Lock()
+	dir, ok := from.noteDir(id)
+	from.mu.Unlock()
+	if !ok {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if to, ok := s.noteDir(id); ok {
+		s.copyImages(filepath.Join(from.dir, dir), body, to)
 	}
 }
 

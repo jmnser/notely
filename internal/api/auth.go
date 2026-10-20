@@ -11,10 +11,13 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/jmnser/notely/internal/note"
 )
 
 const (
@@ -37,9 +40,11 @@ var checkWait = 5 * time.Second
 var errBusy = errors.New("busy")
 
 // loadUsers reads the users file, a JSON object mapping user names to argon2id
-// hashes. A missing file is created with the default user and a random
-// password, which is logged once.
-func loadUsers(path string) (map[string]argonHash, error) {
+// hashes, or to objects with the hash and the shared spaces the user is a
+// member of: {"ann": {"hash": "...", "spaces": ["Family"]}}. It returns the
+// hashes and each user's shared spaces. A missing file is created with the
+// default user and a random password, which is logged once.
+func loadUsers(path string) (map[string]argonHash, map[string][]string, error) {
 	data, err := os.ReadFile(path) //nolint:gosec // path is the -users flag
 	if errors.Is(err, fs.ErrNotExist) {
 		password := rand.Text()
@@ -49,36 +54,71 @@ func loadUsers(path string) (map[string]argonHash, error) {
 		}
 	}
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	var hashes map[string]string
-	if err := json.Unmarshal(data, &hashes); err != nil {
-		return nil, fmt.Errorf("read %s: %w", path, err)
+	var entries map[string]userEntry
+	if err := json.Unmarshal(data, &entries); err != nil {
+		return nil, nil, fmt.Errorf("read %s: %w", path, err)
 	}
 	if name, ok := duplicateKey(data); ok {
-		return nil, fmt.Errorf("read %s: user %s is listed twice", path, name)
+		return nil, nil, fmt.Errorf("read %s: user %s is listed twice", path, name)
 	}
-	users := map[string]argonHash{}
+	users, spaces := map[string]argonHash{}, map[string][]string{}
 	folded := map[string]string{}
-	for name, s := range hashes {
+	spaceNames := map[string]string{} // lower-case → as written
+	for name, e := range entries {
 		if !validID.MatchString(name) { // names become directory names
-			return nil, fmt.Errorf("read %s: user name %q: use letters, digits, - and _", path, name)
+			return nil, nil, fmt.Errorf("read %s: user name %q: use letters, digits, - and _", path, name)
 		}
 		// Directories of names differing in case clash on some file systems.
 		if other, ok := folded[strings.ToLower(name)]; ok {
-			return nil, fmt.Errorf("read %s: user names %s and %s differ only in case", path, other, name)
+			return nil, nil, fmt.Errorf("read %s: user names %s and %s differ only in case", path, other, name)
 		}
 		folded[strings.ToLower(name)] = name
-		h, err := parseHash(s)
+		h, err := parseHash(e.Hash)
 		if err != nil {
-			return nil, fmt.Errorf("read %s: user %s: %w", path, name, err)
+			return nil, nil, fmt.Errorf("read %s: user %s: %w", path, name, err)
 		}
 		users[name] = h
+		for _, sp := range e.Spaces {
+			if !validShare(sp) {
+				return nil, nil, fmt.Errorf("read %s: user %s: shared space %q: use one space name, no path", path, name, sp)
+			}
+			if other, ok := spaceNames[strings.ToLower(sp)]; ok && other != sp {
+				return nil, nil, fmt.Errorf("read %s: shared spaces %s and %s differ only in case", path, other, sp)
+			}
+			spaceNames[strings.ToLower(sp)] = sp
+			if !slices.Contains(spaces[name], sp) {
+				spaces[name] = append(spaces[name], sp)
+			}
+		}
 	}
 	if len(users) == 0 {
-		return nil, fmt.Errorf("read %s: no users", path)
+		return nil, nil, fmt.Errorf("read %s: no users", path)
 	}
-	return users, nil
+	return users, spaces, nil
+}
+
+// userEntry is a value of the users file: a hash, or an object.
+type userEntry struct {
+	Hash   string   `json:"hash"`
+	Spaces []string `json:"spaces"`
+}
+
+func (e *userEntry) UnmarshalJSON(data []byte) error {
+	if err := json.Unmarshal(data, &e.Hash); err == nil {
+		return nil
+	}
+	type plain userEntry
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.DisallowUnknownFields() // a misspelt key would drop spaces silently
+	return dec.Decode((*plain)(e))
+}
+
+// validShare reports whether name works as a shared space: one space name
+// that is its own directory name.
+func validShare(name string) bool {
+	return name != "" && !strings.Contains(name, "/") && note.SpacePath(name) == name && fileName(name, "") == name
 }
 
 // duplicateKey returns a key the JSON object data has twice; json.Unmarshal

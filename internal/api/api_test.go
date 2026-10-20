@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/jmnser/notely/internal/note"
@@ -23,9 +24,10 @@ func request(t *testing.T, h http.Handler, method, path, body string, header ...
 	return w
 }
 
-// only returns a storeOf for newHandler that always returns s.
-func only(s *store) func(*http.Request) *store {
-	return func(*http.Request) *store { return s }
+// only returns a viewOf for newHandler that always returns a view of s.
+func only(s *store) func(*http.Request) *view {
+	v := &view{own: s, moves: &sync.Mutex{}}
+	return func(*http.Request) *view { return v }
 }
 
 func list(t *testing.T, h http.Handler) []note.Note {

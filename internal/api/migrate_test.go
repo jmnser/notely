@@ -85,7 +85,7 @@ func TestLoadUsersUnique(t *testing.T) {
 	} {
 		path := filepath.Join(t.TempDir(), "users.json")
 		writeNote(t, filepath.Dir(path), "users.json", data)
-		if _, err := loadUsers(path); err == nil {
+		if _, _, err := loadUsers(path); err == nil {
 			t.Errorf("%s: loaded", name)
 		}
 	}

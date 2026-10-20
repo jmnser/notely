@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io/fs"
 	"log"
+	"maps"
 	"net"
 	"net/http"
 	"net/netip"
@@ -95,12 +96,14 @@ type syncStatus struct {
 // app's notes replace the branch content in a new commit. The notes are in
 // <dir>/<user>; next to them, in .sync, it keeps settings.json, token (mode
 // 0600) and repo, a clone the notes are mirrored into; only the notes' .md
-// files and images are committed.
+// files and images are committed, those of the user's shared spaces in
+// shared/<space>.
 type syncer struct {
-	dir   string          // per-user directories
-	users map[string]bool // users allowed to sync; state of removed users is kept but idle
-	runs  chan string
-	work  sync.Mutex // one sync at a time
+	dir    string                       // per-user directories
+	users  map[string]bool              // users allowed to sync; state of removed users is kept but idle
+	shared map[string]map[string]string // user → shared space → its directory
+	runs   chan string
+	work   sync.Mutex // one sync at a time
 
 	mu     sync.Mutex
 	status map[string]syncStatus
@@ -340,7 +343,11 @@ func (s *syncer) push(ctx context.Context, user string) (string, error) {
 			return "", fmt.Errorf("reset: %w", err)
 		}
 	}
-	if err := mirror(filepath.Join(s.dir, user), wt.Filesystem.Root()); err != nil {
+	srcs := []mirrorSource{{dir: filepath.Join(s.dir, user)}}
+	for _, name := range slices.Sorted(maps.Keys(s.shared[user])) {
+		srcs = append(srcs, mirrorSource{dir: s.shared[user][name], prefix: path.Join(sharedDir, name)})
+	}
+	if err := mirror(wt.Filesystem.Root(), srcs...); err != nil {
 		return "", fmt.Errorf("copy notes: %w", err)
 	}
 	if err := wt.AddWithOptions(&git.AddOptions{All: true}); err != nil {
@@ -392,10 +399,10 @@ func openRepo(dir, remote string) (*git.Repository, error) {
 	return repo, repo.SetConfig(cfg)
 }
 
-// copyFile copies rel of from to to, unless to holds it already.
-func copyFile(from, to *os.Root, rel string) error {
+// copyFile copies rel of from to out in to, unless to holds it already.
+func copyFile(from, to *os.Root, rel, out string) error {
 	if imageName.MatchString(path.Base(rel)) {
-		if _, err := to.Stat(rel); err == nil {
+		if _, err := to.Stat(out); err == nil {
 			return nil // an image's name is its content
 		}
 	}
@@ -403,23 +410,21 @@ func copyFile(from, to *os.Root, rel string) error {
 	if err != nil {
 		return err
 	}
-	if old, err := to.ReadFile(rel); err == nil && bytes.Equal(old, data) {
+	if old, err := to.ReadFile(out); err == nil && bytes.Equal(old, data) {
 		return nil
 	}
-	if err := to.MkdirAll(path.Dir(rel), 0o700); err != nil {
+	if err := to.MkdirAll(path.Dir(out), 0o700); err != nil {
 		return err
 	}
-	return to.WriteFile(rel, data, 0o600)
+	return to.WriteFile(out, data, 0o600)
 }
 
-// mirror makes dst hold exactly the .md files and images of src. Dot entries
-// and symbolic links are skipped; os.Root keeps all access inside both trees.
-func mirror(src, dst string) error {
-	from, err := os.OpenRoot(src)
-	if err != nil {
-		return err
-	}
-	defer from.Close() //nolint:errcheck
+// mirrorSource is a directory mirrored to prefix.
+type mirrorSource struct{ dir, prefix string }
+
+// mirror makes dst hold exactly the .md files and images of srcs. Dot entries
+// and symbolic links are skipped; os.Root keeps all access inside the trees.
+func mirror(dst string, srcs ...mirrorSource) error {
 	to, err := os.OpenRoot(dst)
 	if err != nil {
 		return err
@@ -427,32 +432,10 @@ func mirror(src, dst string) error {
 	defer to.Close() //nolint:errcheck
 
 	files := map[string]bool{}
-	err = fs.WalkDir(from.FS(), ".", func(rel string, d fs.DirEntry, err error) error {
-		switch {
-		case errors.Is(err, fs.ErrNotExist): // moved by an edit meanwhile; the next sync has it
-			return nil
-		case err != nil:
-			return err
-		case rel != "." && strings.HasPrefix(d.Name(), "."):
-			if d.IsDir() {
-				return fs.SkipDir
-			}
-			return nil
-		case !d.Type().IsRegular():
-			return nil
-		case path.Ext(rel) != noteExt && !imageName.MatchString(d.Name()):
-			return nil
-		}
-		files[rel] = true
-		if err := copyFile(from, to, rel); errors.Is(err, fs.ErrNotExist) {
-			delete(files, rel) // moved by an edit meanwhile; the next sync has it
-		} else if err != nil {
+	for _, src := range srcs {
+		if err := mirrorFrom(src, to, files); err != nil {
 			return err
 		}
-		return nil
-	})
-	if err != nil {
-		return err
 	}
 	var dirs []string
 	err = fs.WalkDir(to.FS(), ".", func(rel string, d fs.DirEntry, err error) error {
@@ -475,6 +458,44 @@ func mirror(src, dst string) error {
 		_ = to.Remove(dir) // fails while not empty
 	}
 	return err
+}
+
+// mirrorFrom copies the .md files and images of src to to, adding their
+// paths to files.
+func mirrorFrom(src mirrorSource, to *os.Root, files map[string]bool) error {
+	from, err := os.OpenRoot(src.dir)
+	if err != nil {
+		return err
+	}
+	defer from.Close() //nolint:errcheck
+	return fs.WalkDir(from.FS(), ".", func(rel string, d fs.DirEntry, err error) error {
+		switch {
+		case errors.Is(err, fs.ErrNotExist): // moved by an edit meanwhile; the next sync has it
+			return nil
+		case err != nil:
+			return err
+		case rel != "." && strings.HasPrefix(d.Name(), "."):
+			if d.IsDir() {
+				return fs.SkipDir
+			}
+			return nil
+		case !d.Type().IsRegular():
+			return nil
+		case path.Ext(rel) != noteExt && !imageName.MatchString(d.Name()):
+			return nil
+		}
+		out := path.Join(src.prefix, rel)
+		if files[out] {
+			return nil // the user's own file, in a space named like the shared directory
+		}
+		files[out] = true
+		if err := copyFile(from, to, rel, out); errors.Is(err, fs.ErrNotExist) {
+			delete(files, out) // moved by an edit meanwhile; the next sync has it
+		} else if err != nil {
+			return err
+		}
+		return nil
+	})
 }
 
 // handler serves the signed-on user's git backup settings:

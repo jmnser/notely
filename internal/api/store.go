@@ -24,6 +24,7 @@ const noteExt = ".md"
 type store struct {
 	mu    sync.Mutex
 	dir   string
+	space string // a shared space's name: its notes' top space, left out of their paths
 	notes map[string]note.Note
 	paths map[string]string // id → file path relative to dir
 }
@@ -96,6 +97,14 @@ func (s *store) list() []note.Note {
 	return notes
 }
 
+// spaceOf returns the space of note id.
+func (s *store) spaceOf(id string) (string, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	n, ok := s.notes[id]
+	return n.Space, ok
+}
+
 // put creates or replaces a note; the last write wins.
 func (s *store) put(n note.Note) (note.Note, error) {
 	n.Updated = time.Now().UTC()
@@ -108,7 +117,7 @@ func (s *store) put(n note.Note) (note.Note, error) {
 		return note.Note{}, err
 	}
 	if exists && old != rel && !s.sameFile(old, rel) {
-		s.copyImages(n.Body, filepath.Dir(old), filepath.Dir(rel))
+		s.copyImages(filepath.Join(s.dir, filepath.Dir(old)), n.Body, filepath.Dir(rel))
 		if err := s.remove(old); err != nil {
 			log.Print(err)
 		}
@@ -138,8 +147,12 @@ func (s *store) delete(id string) error {
 // as on macOS and Windows file systems.
 func (s *store) pathFor(n note.Note, old string) string {
 	base := fileName(n.Title, "untitled")
-	if n.Space != "" {
-		base = filepath.Join(s.spaceDir(fileName(n.Space, "unnamed")), base)
+	space := n.Space
+	if s.space != "" {
+		_, space, _ = strings.Cut(space, "/")
+	}
+	if space != "" {
+		base = filepath.Join(s.spaceDir(fileName(space, "unnamed")), base)
 	}
 	if numbered(old, base) {
 		return old

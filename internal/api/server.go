@@ -10,13 +10,17 @@ import (
 	"net/http"
 	"path/filepath"
 	"slices"
+	"strings"
+	"sync"
 	"time"
 )
 
 // Server serves /api/ and /healthz.
 type Server struct {
 	http.Handler
+	api    http.Handler      // behind sign-on
 	stores map[string]*store // per user
+	shared map[string]*space // by name
 	sync   *syncer
 	events *events
 }
@@ -26,33 +30,76 @@ type Server struct {
 const usersDir = "users"
 
 // Open loads the users file, by default <dir>/.users.json, created with the
-// default user if missing, and each user's notes in <dir>/users/<user>. Notes
-// of the former shared layout are moved to a user first.
+// default user if missing, each user's notes in <dir>/users/<user> and the
+// shared spaces' in <dir>/shared/<space>. Notes of the former shared layout
+// are moved to a user first.
 func Open(dir, usersFile string) (*Server, error) {
 	if usersFile == "" {
 		usersFile = filepath.Join(dir, ".users.json") // dot files are not notes
 	}
-	users, err := loadUsers(usersFile)
+	users, spaces, err := loadUsers(usersFile)
 	if err != nil {
 		return nil, err
 	}
 	if err := migrate(dir, users); err != nil {
 		return nil, fmt.Errorf("move notes to the per-user layout: %w", err)
 	}
-	stores, names := map[string]*store{}, map[string]bool{}
-	for name := range users {
-		if stores[name], err = openStore(filepath.Join(dir, usersDir, name)); err != nil {
+	srv := &Server{stores: map[string]*store{}, shared: map[string]*space{}}
+	names := slices.Sorted(maps.Keys(users))
+	for _, name := range names {
+		if srv.stores[name], err = openStore(filepath.Join(dir, usersDir, name)); err != nil {
 			return nil, err
 		}
-		names[name] = true
+		for _, sp := range spaces[name] {
+			if srv.shared[sp] == nil {
+				st, err := openStore(filepath.Join(dir, sharedDir, sp))
+				if err != nil {
+					return nil, err
+				}
+				st.space = sp
+				srv.shared[sp] = &space{name: sp, store: st}
+			}
+			srv.shared[sp].members = append(srv.shared[sp].members, name)
+		}
 	}
-	sy := newSyncer(filepath.Join(dir, usersDir), names)
-	mux, sh := http.NewServeMux(), sy.handler()
+	views, allowed := map[string]*view{}, map[string]bool{}
+	sharedDirs := map[string]map[string]string{} // user → shared space → directory
+	moves := &sync.Mutex{}
+	for _, name := range names {
+		v := &view{user: name, own: srv.stores[name], moves: moves}
+		sharedDirs[name] = map[string]string{}
+		for _, sp := range spaces[name] {
+			v.shared = append(v.shared, srv.shared[sp])
+			sharedDirs[name][sp] = srv.shared[sp].store.dir
+			warnPrivate(name, srv.stores[name], sp)
+		}
+		views[name], allowed[name] = v, true
+	}
+	srv.sync = newSyncer(filepath.Join(dir, usersDir), allowed)
+	srv.sync.shared = sharedDirs
+	mux, sh := http.NewServeMux(), srv.sync.handler()
 	mux.Handle("/api/sync", sh)
 	mux.Handle("/api/sync/", sh)
-	ev := newEvents()
-	mux.Handle("/", newHandler(func(r *http.Request) *store { return stores[userOf(r)] }, ev))
-	return &Server{Handler: newAuth(users).handler(mux), stores: stores, sync: sy, events: ev}, nil
+	srv.events = newEvents()
+	mux.Handle("/", newHandler(func(r *http.Request) *view { return views[userOf(r)] }, srv.events))
+	srv.api = mux
+	srv.Handler = newAuth(users).handler(mux)
+	return srv, nil
+}
+
+// warnPrivate logs if user has notes of their own in shared space sp: they
+// stay private, but show in the same space.
+func warnPrivate(user string, own *store, sp string) {
+	n := 0
+	for _, nt := range own.list() {
+		if top, _, _ := strings.Cut(nt.Space, "/"); strings.EqualFold(top, sp) {
+			n++
+		}
+	}
+	if n > 0 {
+		log.Printf("%s has %d private notes in the shared space %s; they stay private until moved out and back",
+			user, n, sp)
+	}
 }
 
 // Shutdown ends the open event streams. Call it once, when the server shuts down.
@@ -78,15 +125,22 @@ func (s *Server) RunCleanup(ctx context.Context) {
 			return
 		case now := <-t.C:
 			for _, name := range slices.Sorted(maps.Keys(s.stores)) {
-				n, err := s.stores[name].cleanImages(now)
-				if err != nil {
-					log.Printf("clean images of %s: %v", name, err)
-				}
-				if n > 0 {
-					log.Printf("deleted %d unreferenced images of %s", n, name)
-				}
+				cleanImages(s.stores[name], name, now)
+			}
+			for _, name := range slices.Sorted(maps.Keys(s.shared)) {
+				cleanImages(s.shared[name].store, "the shared space "+name, now)
 			}
 		}
+	}
+}
+
+func cleanImages(s *store, owner string, now time.Time) {
+	n, err := s.cleanImages(now)
+	if err != nil {
+		log.Printf("clean images of %s: %v", owner, err)
+	}
+	if n > 0 {
+		log.Printf("deleted %d unreferenced images of %s", n, owner)
 	}
 }
 
