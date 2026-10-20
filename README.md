@@ -106,7 +106,7 @@ To share a space, list it for each member; the user's value becomes an object:
 }
 ```
 
-Members see and edit its notes, stored in `<data>/shared/Family/`, and their sub-spaces such as `Family/Trips`. Moving a note into the space shares it; moving it out makes it the mover's. Notes a member had in a space of that name before stay private.
+Members see and edit its notes, stored in `<data>/shared/Family/`, and their sub-spaces such as `Family/Trips`; the app marks it and offers no rename. Moving a note into the space shares it; moving it out makes it the mover's. Notes a member had in a space of that name before stay private, also when moved within it. A shared space is one space name: no `/`, not `Notes`, no leading dot, and spelt the same for all members. Servers before v0.14.0 cannot read a users file with objects.
 
 Serve over HTTPS beyond localhost; see [design.md](design.md#sign-on).
 
@@ -116,4 +116,4 @@ In edit mode, the image button or pasting an image uploads it and inserts `![nam
 
 ## Git backup
 
-Each user can push the notes to their own repository every `-sync-interval` (default 1h): open **Git backup** at the bottom of the sidebar and enter the repository URL, branch and a token. For GitHub, create a fine-grained token for that repository only with _Contents: read and write_. Shared spaces go to `shared/<space>/` in each member's repository. The token is stored in `<data>/users/<user>/.sync/token` on the server, never in git. Repositories on loopback or link-local addresses are refused; LAN addresses work. See [design.md](design.md#git-backup).
+Each user can push the notes to their own repository every `-sync-interval` (default 1h): open **Git backup** at the bottom of the sidebar and enter the repository URL, branch and a token. For GitHub, create a fine-grained token for that repository only with _Contents: read and write_. Shared spaces go to `shared/<space>/` in each member's repository, so every member's backup holds them. The token is stored in `<data>/users/<user>/.sync/token` on the server, never in git. Repositories on loopback or link-local addresses are refused; LAN addresses work. See [design.md](design.md#git-backup).

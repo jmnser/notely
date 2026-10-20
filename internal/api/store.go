@@ -97,12 +97,12 @@ func (s *store) list() []note.Note {
 	return notes
 }
 
-// spaceOf returns the space of note id.
-func (s *store) spaceOf(id string) (string, bool) {
+// get returns note id.
+func (s *store) get(id string) (note.Note, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	n, ok := s.notes[id]
-	return n.Space, ok
+	return n, ok
 }
 
 // put creates or replaces a note; the last write wins.

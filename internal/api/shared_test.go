@@ -10,38 +10,14 @@ import (
 	"testing"
 
 	"github.com/go-git/go-git/v5"
+
+	"github.com/jmnser/notely/internal/note"
 )
 
 func TestSharedSpaces(t *testing.T) {
-	dir := t.TempDir()
-	users := filepath.Join(t.TempDir(), "users.json")
-	h := hashPassword("pw")
-	writeNote(t, dir, "users/ann/Family/Diary.md", "---\nid: diary\ntitle: \"Diary\"\nspace: \"Family\"\nupdated: 2026-01-01T00:00:00Z\n---\nprivate")
-	if err := os.WriteFile(filepath.Join(dir, layoutFile), []byte(usersDir), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(users, []byte(`{"ann":{"hash":"`+h+`","spaces":["Family"]},"bob":{"hash":"`+h+`","spaces":["Family"]},"carl":"`+h+`"}`), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	s, err := Open(dir, users)
-	if err != nil {
-		t.Fatal(err)
-	}
-	signOn := func(user string) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			s.api.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), userKey{}, user)))
-		})
-	}
+	_, dir, signOn := sharedServer(t)
 	ann, bob, carl := signOn("ann"), signOn("bob"), signOn("carl")
-	ids := func(h http.Handler) []string {
-		notes := list(t, h)
-		out := make([]string, 0, len(notes))
-		for _, n := range notes {
-			out = append(out, n.ID)
-		}
-		slices.Sort(out)
-		return out
-	}
+	ids := func(h http.Handler) []string { return ids(t, h) }
 
 	if w := request(t, ann, http.MethodPut, "/api/notes/plan", `{"title":"Plan","space":"family/Trips"}`); w.Code != http.StatusOK {
 		t.Fatalf("put: %d %s", w.Code, w.Body)
@@ -58,10 +34,19 @@ func TestSharedSpaces(t *testing.T) {
 	if got := ids(ann); !slices.Equal(got, []string{"diary", "plan"}) {
 		t.Errorf("ann sees %v", got)
 	}
-	// Ann's note from before the space was shared stays hers when edited.
-	request(t, ann, http.MethodPut, "/api/notes/diary", `{"title":"Diary","space":"Family","body":"more"}`)
-	if got := ids(bob); !slices.Equal(got, []string{"plan"}) {
-		t.Errorf("private note shared: bob sees %v", got)
+	if n := list(t, bob)[0]; n.Space != "Family/Trips" {
+		t.Errorf("space = %q, want the shared space's spelling", n.Space)
+	}
+	// Ann's note from before the space was shared stays hers when edited,
+	// moved within the space or its name's case changed.
+	for _, space := range []string{"Family", "Family/Old", "family"} {
+		request(t, ann, http.MethodPut, "/api/notes/diary", `{"title":"Diary","space":"`+space+`","body":"more"}`)
+		if got := ids(bob); !slices.Equal(got, []string{"plan"}) {
+			t.Errorf("private note shared in %s: bob sees %v", space, got)
+		}
+	}
+	if w := request(t, bob, http.MethodGet, "/api/spaces", ""); strings.TrimSpace(w.Body.String()) != `{"shared":["Family"]}` {
+		t.Errorf("spaces = %s", w.Body)
 	}
 
 	img := request(t, bob, http.MethodPost, "/api/notes/plan/images", string(pngData(t)))
@@ -104,6 +89,81 @@ func TestSharedSpaces(t *testing.T) {
 	if got := ids(bob); len(got) != 0 {
 		t.Errorf("bob sees %v after ann deleted it", got)
 	}
+}
+
+// sharedServer opens a server where ann and bob share Family and carl
+// shares nothing, and returns it, its data directory and a func returning
+// a handler signed on as a user.
+func sharedServer(t *testing.T) (*Server, string, func(string) http.Handler) {
+	t.Helper()
+	dir := t.TempDir()
+	users := filepath.Join(t.TempDir(), "users.json")
+	h := hashPassword("pw")
+	writeNote(t, dir, "users/ann/Family/Diary.md", "---\nid: diary\ntitle: \"Diary\"\nspace: \"Family\"\nupdated: 2026-01-01T00:00:00Z\n---\nprivate")
+	if err := os.WriteFile(filepath.Join(dir, layoutFile), []byte(usersDir), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(users, []byte(`{"ann":{"hash":"`+h+`","spaces":["Family"]},"bob":{"hash":"`+h+`","spaces":["Family"]},"carl":"`+h+`"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s, err := Open(dir, users)
+	if err != nil {
+		t.Fatal(err)
+	}
+	signOn := func(user string) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			s.api.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), userKey{}, user)))
+		})
+	}
+	return s, dir, signOn
+}
+
+func ids(t *testing.T, h http.Handler) []string {
+	t.Helper()
+	notes := list(t, h)
+	out := make([]string, 0, len(notes))
+	for _, n := range notes {
+		out = append(out, n.ID)
+	}
+	slices.Sort(out)
+	return out
+}
+
+func TestSharedCopies(t *testing.T) {
+	s, _, signOn := sharedServer(t)
+	ann, bob := signOn("ann"), signOn("bob")
+	ids := func(h http.Handler) []string { return ids(t, h) }
+	name := pngName(t)
+	// A note in two stores shows its newest copy; deleting deletes both.
+	request(t, bob, http.MethodPut, "/api/notes/dup", `{"title":"Mine","space":"Mine"}`)
+	if _, err := s.shared["Family"].store.put(noteFor("dup", "Theirs", "Family")); err != nil {
+		t.Fatal(err)
+	}
+	if got := list(t, bob); len(got) != 1 || got[0].Title != "Theirs" {
+		t.Errorf("duplicate: %v", got)
+	}
+	request(t, bob, http.MethodDelete, "/api/notes/dup", "")
+	if got := ids(bob); len(got) != 0 {
+		t.Errorf("after deleting a duplicate: %v", got)
+	}
+
+	// References of the former layout are made relative when sharing.
+	old := request(t, ann, http.MethodPost, "/api/images", string(pngData(t)))
+	if old.Code != http.StatusOK {
+		t.Fatal(old.Code)
+	}
+	request(t, ann, http.MethodPut, "/api/notes/old", `{"title":"Old","body":"![](/images/`+name+`)"}`)
+	request(t, ann, http.MethodPut, "/api/notes/old", `{"title":"Old","space":"Family","body":"![](/images/`+name+`)"}`)
+	if got := list(t, bob); len(got) != 1 || got[0].Body != "![]("+name+")" {
+		t.Errorf("shared note with an old reference: %v", got)
+	}
+	if w := request(t, bob, http.MethodGet, "/api/notes/old/images/"+name, ""); w.Code != http.StatusOK {
+		t.Errorf("its image: %d", w.Code)
+	}
+}
+
+func noteFor(id, title, space string) note.Note {
+	return note.Note{ID: id, Title: title, Space: space}
 }
 
 func TestSharedEvents(t *testing.T) {

@@ -82,6 +82,12 @@ func exchange(push []note.Note, deleted []string) ([]note.Note, map[string]error
 	return notes, rejected, call(get, "/api/notes", nil, &notes)
 }
 
+// sharedSpaces returns the names of the signed-on user's shared spaces.
+func sharedSpaces() ([]string, error) {
+	var out struct{ Shared []string }
+	return out.Shared, call(get, "/api/spaces", nil, &out)
+}
+
 // uploadImage stores an image file (a JavaScript Blob) next to note n on the
 // backend, pushing n first if the backend does not know it yet, and returns
 // the image's name, which n references it by.

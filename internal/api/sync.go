@@ -486,7 +486,8 @@ func mirrorFrom(src mirrorSource, to *os.Root, files map[string]bool) error {
 		}
 		out := path.Join(src.prefix, rel)
 		if files[out] {
-			return nil // the user's own file, in a space named like the shared directory
+			log.Printf("backup: left out %s of %s: the user's own space %s has it", rel, src.dir, path.Dir(out))
+			return nil
 		}
 		files[out] = true
 		if err := copyFile(from, to, rel, out); errors.Is(err, fs.ErrNotExist) {

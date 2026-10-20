@@ -1,7 +1,7 @@
 package api
 
 import (
-	"log"
+	"io/fs"
 	"slices"
 	"strings"
 	"sync"
@@ -20,14 +20,14 @@ type space struct {
 }
 
 // view is what a user sees: their own notes and those of their shared
-// spaces. A note whose space changes to or from a shared space moves between
-// the stores; a note keeps its store while its space stays, so notes a user
-// had in a space before it was shared stay private.
+// spaces. A note whose top space changes to or from a shared space moves
+// between the stores; a note keeps its store while its top space stays, so
+// notes a user had in a space before it was shared stay private.
 type view struct {
 	user   string
 	own    *store
 	shared []*space
-	moves  *sync.Mutex // serializes changes, which may touch two stores, across views
+	moves  *sync.Mutex // serializes changes, which may touch several stores, across views
 }
 
 func (v *view) stores() []*store {
@@ -39,30 +39,46 @@ func (v *view) stores() []*store {
 	return stores
 }
 
-// find returns the store holding note id, the user's own first, or nil.
-func (v *view) find(id string) *store {
-	for _, s := range v.stores() {
-		if _, ok := s.spaceOf(id); ok {
-			return s
-		}
-	}
-	return nil
+// topSpace splits a space path into its top space and the rest.
+func topSpace(path string) (top, rest string) {
+	top, rest, _ = strings.Cut(path, "/")
+	return top, rest
 }
 
-// target returns the store for n, which is in store cur if not nil.
-func (v *view) target(n note.Note, cur *store) *store {
-	if cur != nil {
-		if space, _ := cur.spaceOf(n.ID); space == n.Space {
-			return cur
+// find returns the store holding the newest copy of note id, or nil. A note
+// is in several stores when, e.g., an offline device recreated it in a shared
+// space after another member moved it out.
+func (v *view) find(id string) *store {
+	var found *store
+	var newest note.Note
+	for _, s := range v.stores() {
+		if n, ok := s.get(id); ok && (found == nil || n.Updated.After(newest.Updated)) {
+			found, newest = s, n
 		}
 	}
-	top, _, _ := strings.Cut(n.Space, "/")
+	return found
+}
+
+// target returns the store for n, which is in store cur if not nil, and
+// n.Space with a shared top space spelt as configured.
+func (v *view) target(n note.Note, cur *store) (*store, string) {
+	top, rest := topSpace(n.Space)
+	if cur == v.own {
+		if old, ok := cur.get(n.ID); ok {
+			if oldTop, _ := topSpace(old.Space); strings.EqualFold(oldTop, top) {
+				return cur, n.Space
+			}
+		}
+	}
 	for _, sp := range v.shared {
 		if strings.EqualFold(sp.name, top) {
-			return sp.store
+			if rest == "" {
+				return sp.store, sp.name
+			}
+			return sp.store, sp.name + "/" + rest
 		}
 	}
-	return v.own
+	return v.own, n.Space
 }
 
 // audience returns the users who see the notes of s.
@@ -75,28 +91,36 @@ func (v *view) audience(s *store) []string {
 	return []string{v.user}
 }
 
-// list returns the notes of all stores. A note in several, e.g. recreated in
-// a shared space by an offline device after it moved, shows its first copy.
+// list returns the notes of all stores, the newest copy of each.
 func (v *view) list() []note.Note {
-	notes, seen := []note.Note{}, map[string]bool{}
+	byID := map[string]note.Note{}
 	for _, s := range v.stores() {
 		for _, n := range s.list() {
-			if !seen[n.ID] {
-				seen[n.ID] = true
-				notes = append(notes, n)
+			if old, ok := byID[n.ID]; !ok || n.Updated.After(old.Updated) {
+				byID[n.ID] = n
 			}
 		}
+	}
+	notes := make([]note.Note, 0, len(byID))
+	for _, n := range byID {
+		notes = append(notes, n)
 	}
 	note.Sort(notes)
 	return notes
 }
 
-// put stores n and returns it with the users who see the change.
+// put stores n and returns it with the users who see the change. Other
+// copies of the note are deleted; images move along from the newest.
 func (v *view) put(n note.Note) (note.Note, []string, error) {
 	v.moves.Lock()
 	defer v.moves.Unlock()
 	cur := v.find(n.ID)
-	to := v.target(n, cur)
+	to, space := v.target(n, cur)
+	n.Space = space
+	if cur != nil && cur != to {
+		// References of the former layout point into the user's own store.
+		n.Body = oldImageRef.ReplaceAllString(n.Body, "$1$2")
+	}
 	n, err := to.put(n)
 	if err != nil {
 		return n, nil, err
@@ -104,23 +128,52 @@ func (v *view) put(n note.Note) (note.Note, []string, error) {
 	users := v.audience(to)
 	if cur != nil && cur != to {
 		to.importImages(n.ID, n.Body, cur)
-		if err := cur.delete(n.ID); err != nil {
-			log.Print(err)
+	}
+	for _, s := range v.stores() {
+		if _, ok := s.get(n.ID); ok && s != to {
+			if err := s.delete(n.ID); err != nil {
+				return n, users, err
+			}
+			users = union(users, v.audience(s))
 		}
-		users = union(users, v.audience(cur))
 	}
 	return n, users, nil
 }
 
-// delete deletes note id and returns the users who see the change.
+// delete deletes all copies of note id and returns the users who see the change.
 func (v *view) delete(id string) ([]string, error) {
+	v.moves.Lock()
+	defer v.moves.Unlock()
+	var users []string
+	for _, s := range v.stores() {
+		if _, ok := s.get(id); ok {
+			if err := s.delete(id); err != nil {
+				return users, err
+			}
+			users = union(users, v.audience(s))
+		}
+	}
+	return users, nil
+}
+
+// putImage stores an image next to note id, which may not move meanwhile.
+func (v *view) putImage(id string, data []byte) (string, error) {
 	v.moves.Lock()
 	defer v.moves.Unlock()
 	s := v.find(id)
 	if s == nil {
-		return nil, nil
+		return "", fs.ErrNotExist
 	}
-	return v.audience(s), s.delete(id)
+	return s.putImage(id, data)
+}
+
+// spaces returns the names of the user's shared spaces.
+func (v *view) spaces() []string {
+	names := make([]string, 0, len(v.shared))
+	for _, sp := range v.shared {
+		names = append(names, sp.name)
+	}
+	return names
 }
 
 func union(a, b []string) []string {

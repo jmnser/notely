@@ -81,6 +81,7 @@ type ui struct {
 	backDepth int  // history entries pushed for in-app back steps, see syncBack
 	skipPop   int  // popstate events caused by syncBack itself
 	events    *eventSource
+	shared    []string // the user's shared spaces, top-level spaces other users see too
 }
 
 // eventSource is an open stream of the backend's change events.
@@ -375,6 +376,7 @@ func (u *ui) Render() app.UI {
 // searching every space is open.
 func (u *ui) renderSpace(s *note.Space, searching bool) app.UI {
 	open := searching || !u.collapsed[s.Path]
+	shared := u.isShared(s.Path)
 	class := "space"
 	if !open {
 		class += " collapsed"
@@ -384,6 +386,9 @@ func (u *ui) renderSpace(s *note.Space, searching bool) app.UI {
 			app.Button().Class("space-name").Aria("expanded", open).Body(
 				app.Span().Class("chevron").Body(icon("expand_more")),
 				app.Span().Class("label").Text(s.Name),
+				app.If(shared, func() app.UI {
+					return app.Span().Class("shared").Title("Shared with other users").Body(icon("group"))
+				}),
 				app.Span().Class("count").Text(s.Count),
 			).OnClick(func(app.Context, app.Event) {
 				u.collapsed[s.Path] = !u.collapsed[s.Path]
@@ -391,9 +396,12 @@ func (u *ui) renderSpace(s *note.Space, searching bool) app.UI {
 			iconButton("add", "New note or subspace").OnClick(func(app.Context, app.Event) {
 				u.createNew(s.Path)
 			}, app.EventScope(s.Path)),
-			iconButton("edit", "Rename space").OnClick(func(app.Context, app.Event) {
-				u.renameSpace(s.Path)
-			}, app.EventScope(s.Path)),
+			// Renaming would move all notes out of the shared space, for everyone.
+			app.If(!shared, func() app.UI {
+				return iconButton("edit", "Rename space").OnClick(func(app.Context, app.Event) {
+					u.renameSpace(s.Path)
+				}, app.EventScope(s.Path))
+			}),
 			pinButton("Pin space", u.pinned[s.Path]).
 				OnClick(func(app.Context, app.Event) {
 					u.pinSpace(s.Path, !u.pinned[s.Path])
@@ -1085,6 +1093,11 @@ func (u *ui) createNew(space string) {
 	}, value)
 }
 
+// isShared reports whether space path is one of the user's shared spaces.
+func (u *ui) isShared(space string) bool {
+	return slices.ContainsFunc(u.shared, func(s string) bool { return strings.EqualFold(s, space) })
+}
+
 // renameSpace moves space s with its subspaces and notes to another path.
 func (u *ui) renameSpace(s string) {
 	u.ask(prompt{
@@ -1262,6 +1275,11 @@ func (u *ui) sync(app.Context) {
 
 	u.ctx.Async(func() {
 		remote, rejected, err := exchange(push, deleted)
+		var shared []string
+		var sharedErr error
+		if err == nil {
+			shared, sharedErr = sharedSpaces()
+		}
 		u.ctx.Dispatch(func(ctx app.Context) {
 			defer u.listen()      // opens once signed on, closes once signed out
 			if gen != u.syncGen { // signed out meanwhile
@@ -1285,6 +1303,9 @@ func (u *ui) sync(app.Context) {
 				return
 			}
 			u.status = ""
+			if sharedErr == nil {
+				u.shared = shared
+			}
 			for _, err := range rejected {
 				app.Log(err)
 				u.status = "Some notes could not be saved: " + err.Error()

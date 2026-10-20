@@ -51,7 +51,12 @@ func newHandler(viewOf func(*http.Request) *view, ev *events) http.Handler {
 		handle(pattern, func(v *view, w http.ResponseWriter, r *http.Request) { h(v.own, w, r) })
 	}
 	mux.HandleFunc("GET /api/events", ev.serve)
-	byNote("POST /api/notes/{id}/images", (*store).uploadImage)
+	handle("POST /api/notes/{id}/images", func(v *view, w http.ResponseWriter, r *http.Request) {
+		if data, ok := readImage(w, r); ok {
+			name, err := v.putImage(r.PathValue("id"), data)
+			writeImage(w, r, name, err)
+		}
+	})
 	byNote("GET /api/notes/{id}/images", (*store).listImages)
 	byNote("GET /api/notes/{id}/images/{name}", (*store).serveImage)
 	// The former layout's image API, for /images/<name> references and apps
@@ -60,6 +65,9 @@ func newHandler(viewOf func(*http.Request) *view, ev *events) http.Handler {
 	own("GET /api/images/{name}", (*store).serveImage)
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
+	})
+	handle("GET /api/spaces", func(v *view, w http.ResponseWriter, _ *http.Request) {
+		writeJSON(w, map[string][]string{"shared": v.spaces()})
 	})
 	handle("GET /api/notes", func(v *view, w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, v.list())
