@@ -58,7 +58,7 @@ func TestToggle(t *testing.T) {
 	}
 }
 
-func TestToggleSorts(t *testing.T) {
+func TestToggleGroups(t *testing.T) {
 	tests := []struct {
 		name, src string
 		i         int
@@ -73,14 +73,21 @@ func TestToggleSorts(t *testing.T) {
 			"- [ ] b\n  ```\n  x\n  ```\n- [x] a\n  - [ ] a1\n\nend\n",
 		},
 		{"nested list sorts alone", "- [ ] a\n  - [ ] a1\n  - [ ] a2\n- [ ] b\n", 1, "- [ ] a\n  - [ ] a2\n  - [x] a1\n- [ ] b\n"},
-		{"ordered list stays", "1. [ ] a\n2. [ ] b\n", 0, "1. [x] a\n2. [ ] b\n"},
+		{"ordered list keeps numbers", "1. [ ] a\n2. [ ] b\n", 0, "1. [ ] b\n2. [x] a\n"},
+		{
+			"scattered list is grouped", "- [x] a\n- [ ] b\n- [x] c\n- [ ] d\n- [ ] e\n", 3,
+			"- [ ] b\n- [ ] e\n- [x] d\n- [x] a\n- [x] c\n",
+		},
+		{"unchecked joins unchecked", "- [x] a\n- [ ] b\n- [x] c\n", 2, "- [ ] b\n- [ ] c\n- [x] a\n"},
+		{"loose list keeps spacing", "- [ ] a\n- [ ] b\n\n- [x] c\n", 0, "- [ ] b\n- [x] a\n\n- [x] c\n"},
 		{
 			"blockquote with fence", "> - [ ] a\n> - [ ] b\n>   ```\n>   x\n>   ```\n", 0,
 			"> - [ ] b\n>   ```\n>   x\n>   ```\n> - [x] a\n",
 		},
 		{"outer fence stays", "- [ ] a\n- [ ] b\n  ```\n  x\n ```\n", 0, "- [ ] b\n  ```\n  x\n- [x] a\n ```\n"},
 		{"content below marker stays", "- [ ] a\n-\n  b\n- [x] c\n", 0, "- [x] a\n-\n  b\n- [x] c\n"},
-		{"loose list stays", "- [ ] a\n\n- [ ] b\n", 0, "- [x] a\n\n- [ ] b\n"},
+		{"loose list", "- [ ] a\n\n- [ ] b\n", 0, "- [ ] b\n\n- [x] a\n"},
+		{"blockquote", "> - [ ] a\n> - [ ] b\n", 0, "> - [ ] b\n> - [x] a\n"},
 		{"already in place", "- [ ] a\n- [ ] b\n", 1, "- [ ] a\n- [x] b\n"},
 	}
 	for _, tt := range tests {
