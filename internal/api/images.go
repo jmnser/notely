@@ -310,6 +310,9 @@ func nextCleanup(now time.Time) time.Time {
 func (s *store) uploadImage(w http.ResponseWriter, r *http.Request) {
 	if data, ok := readImage(w, r); ok {
 		name, err := s.putImage(r.PathValue("id"), data)
+		if err == nil {
+			s.listAsset(r, data, name)
+		}
 		writeImage(w, r, name, err)
 	}
 }

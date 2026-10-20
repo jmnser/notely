@@ -72,6 +72,9 @@ type ui struct {
 	backup    syncInfo
 	backupMsg string   // git backup status shown in its dialog
 	images    []string // names of the images next to the open note, in their dialog
+	assets    []asset  // the Assets space, newest first
+	asset     string   // key of the open asset
+	uploadTo  string   // Assets subspace the asset file picker uploads to
 	imagesMsg string   // images dialog status
 	syncing   bool
 	again     bool // a sync was requested while one was running
@@ -220,6 +223,8 @@ func (u *ui) Render() app.UI {
 	if cur != nil {
 		class += " open"
 		space, body = cur.Space, cur.Body
+	} else if u.findAsset(u.asset) != nil {
+		class += " open asset-open"
 	}
 	toggle, chevron := "Collapse sidebar", "chevron_left"
 	if u.drawer {
@@ -259,9 +264,12 @@ func (u *ui) Render() app.UI {
 					u.createNew(space)
 				}, app.EventScope(space)),
 			),
-			app.Ul().Class("tree").Body(app.Range(spaces).Slice(func(i int) app.UI {
-				return u.renderSpace(spaces[i], query != "")
-			})),
+			app.Ul().Class("tree").Body(
+				app.Range(spaces).Slice(func(i int) app.UI {
+					return u.renderSpace(spaces[i], query != "")
+				}),
+				u.renderAssets(query),
+			),
 			app.Div().Class("drawer-bottom").Body(
 				app.Button().Class("drawer-toggle").Title(toggle).Aria("label", toggle).Aria("expanded", !u.drawer).
 					Body(icon(chevron), app.Span().Text("Collapse")).OnClick(u.toggleDrawer),
@@ -334,6 +342,7 @@ func (u *ui) Render() app.UI {
 					u.insertImages(ctx.JSSrc().Get("files"))
 					ctx.JSSrc().Set("value", "") // the same file can be picked again
 				}),
+			u.renderAssetView(),
 		),
 		app.Div().Class("snackbar").Hidden(u.status == "" && !u.update).Body(
 			app.Span().Text(u.status),
@@ -771,6 +780,7 @@ func (u *ui) signOut(app.Context, app.Event) {
 				}
 			})
 			u.notes, u.dirty, u.deleted = nil, map[string]int{}, nil
+			u.assets, u.asset = nil, ""
 			u.syncGen++
 			u.syncing, u.again = false, false
 			u.ctx.LocalStorage().Del(storageKey)
@@ -812,6 +822,9 @@ func (u *ui) open(id string) {
 	if id != u.current {
 		u.editing = false
 	}
+	if id != "" {
+		u.asset = ""
+	}
 	u.current = id
 	u.syncBack()
 	app.Window().GetElementByID("title").Set("value", n.Title)
@@ -826,7 +839,7 @@ const backStateKey = "notelyBack"
 // are only pushed on user actions; Chrome skips entries pushed without one.
 func (u *ui) syncBack() {
 	want := 0
-	if u.current != "" {
+	if u.current != "" || u.asset != "" {
 		want++
 	}
 	if u.editing {
@@ -853,9 +866,12 @@ func (u *ui) back(ctx app.Context) {
 		return
 	}
 	u.backDepth--
-	if u.editing {
+	switch {
+	case u.editing:
 		u.setEditing(ctx, false)
-	} else {
+	case u.asset != "":
+		u.openAsset("")
+	default:
 		u.open("")
 	}
 }
@@ -909,19 +925,25 @@ const (
 	maxImage    = 2 << 20
 )
 
+// checkImage explains why file (a JavaScript File) cannot be uploaded, if so.
+func checkImage(f app.Value) string {
+	if !slices.Contains(strings.Split(imageAccept, ","), f.Get("type").String()) {
+		return "Use a PNG, JPEG, GIF or WebP image."
+	}
+	if f.Get("size").Int() > maxImage {
+		return "Images can be up to 2 MiB."
+	}
+	return ""
+}
+
 // insertImages uploads image files (a JavaScript FileList) and inserts a
 // Markdown image for each at the editor's cursor, in order.
 func (u *ui) insertImages(files app.Value) {
 	var list []app.Value
 	for i := range files.Length() {
 		f := files.Index(i)
-		if !slices.Contains(strings.Split(imageAccept, ","), f.Get("type").String()) {
-			u.status = "Use a PNG, JPEG, GIF or WebP image."
-			u.ctx.Update()
-			return
-		}
-		if f.Get("size").Int() > maxImage {
-			u.status = "Images can be up to 2 MiB."
+		if msg := checkImage(f); msg != "" {
+			u.status = msg
 			u.ctx.Update()
 			return
 		}
@@ -1346,6 +1368,7 @@ func (u *ui) sync(app.Context) {
 			}
 			u.deleted = u.deleted[len(deleted):]
 			u.notes = note.Merge(remote, u.notes, u.dirty, u.deleted)
+			u.loadAssets()
 			if _, ok := u.dirty[u.current]; !ok {
 				u.open(u.current) // show changes made elsewhere
 			}

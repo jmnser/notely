@@ -804,6 +804,52 @@ dialog p {
   color: var(--md-error);
 }
 
+/* Assets space: uploaded images, shown instead of a note */
+.app:not(.asset-open) .asset-view,
+.app.asset-open main > :not(.asset-view) {
+  display: none !important;
+}
+.asset-view {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+}
+.asset-name {
+  margin: 0;
+  padding: 8px 32px;
+  color: var(--md-on-surface);
+  font-size: 18px;
+  font-weight: 500;
+  line-height: 24px;
+  overflow-wrap: anywhere;
+}
+.asset-image {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 8px 32px 32px;
+}
+.asset-image img {
+  max-width: 100%;
+  height: auto;
+  border-radius: 12px;
+}
+.asset-row .note {
+  display: grid;
+  grid-template-columns: 40px minmax(0, 1fr);
+  column-gap: 12px;
+  align-items: center;
+  padding-left: 16px;
+}
+.thumb {
+  grid-row: span 2;
+  width: 40px;
+  height: 40px;
+  object-fit: cover;
+  border-radius: 8px;
+}
+
 /* Compact window class */
 @media (max-width: 600px) {
   .app {
@@ -836,8 +882,12 @@ dialog p {
   .segmented button {
     padding: 0 12px;
   }
-  #title {
+  #title,
+  .asset-name {
     padding: 8px 16px;
+  }
+  .asset-image {
+    padding: 8px 16px 96px;
   }
   #view {
     padding: 8px 16px 96px;
