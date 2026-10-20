@@ -160,6 +160,9 @@ func (u *ui) listen() {
 	visible := app.Window().Get("document").Get("visibilityState").String() == "visible"
 	if ev := u.events; ev != nil && (u.signedOut || !visible || ev.es.Get("readyState").Int() == 2) {
 		ev.es.Call("close")
+		for _, h := range []string{"onopen", "onmessage", "onerror"} {
+			ev.es.Set(h, nil)
+		}
 		for _, f := range ev.funcs {
 			f.Release()
 		}
@@ -175,9 +178,8 @@ func (u *ui) listen() {
 	})
 	failed := app.FuncOf(func(app.Value, []app.Value) any {
 		if es.Get("readyState").Int() == 2 { // given up, e.g. signed out or the server is down
-			u.ctx.Dispatch(func(ctx app.Context) {
-				ctx.After(retry, func(app.Context) { u.listen() })
-			})
+			// sync finds out which and then reopens or closes the stream.
+			u.ctx.Dispatch(func(ctx app.Context) { ctx.After(retry, u.sync) })
 		}
 		return nil
 	})
@@ -916,6 +918,7 @@ func (u *ui) insertImages(files app.Value) {
 			switch {
 			case errors.Is(err, errSignedOut):
 				u.signedOut, u.status = true, ""
+				u.listen()
 			case err != nil:
 				u.status = "Could not upload the image: " + err.Error()
 			default:

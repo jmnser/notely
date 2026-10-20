@@ -72,6 +72,10 @@ func loadUsers(path string) (map[string]argonHash, error) {
 
 type userKey struct{}
 
+// sessionKey holds a func() bool reporting whether the request's session is
+// still signed on, for long-lived responses.
+type sessionKey struct{}
+
 // userOf returns the signed-on user of a request passed on by auth.
 func userOf(r *http.Request) string {
 	user, _ := r.Context().Value(userKey{}).(string)
@@ -162,7 +166,9 @@ func (a *auth) handler(next http.Handler) http.Handler {
 			http.Error(w, "signed out", http.StatusUnauthorized)
 			return
 		}
-		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), userKey{}, user)))
+		ctx := context.WithValue(r.Context(), userKey{}, user)
+		ctx = context.WithValue(ctx, sessionKey{}, func() bool { _, ok := a.user(r); return ok })
+		next.ServeHTTP(w, r.WithContext(ctx))
 	}))
 	mux.Handle("/", next)
 	return http.NewCrossOriginProtection().Handler(mux)
