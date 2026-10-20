@@ -74,6 +74,13 @@ func TestToggleSorts(t *testing.T) {
 		},
 		{"nested list sorts alone", "- [ ] a\n  - [ ] a1\n  - [ ] a2\n- [ ] b\n", 1, "- [ ] a\n  - [ ] a2\n  - [x] a1\n- [ ] b\n"},
 		{"ordered list stays", "1. [ ] a\n2. [ ] b\n", 0, "1. [x] a\n2. [ ] b\n"},
+		{
+			"blockquote with fence", "> - [ ] a\n> - [ ] b\n>   ```\n>   x\n>   ```\n", 0,
+			"> - [ ] b\n>   ```\n>   x\n>   ```\n> - [x] a\n",
+		},
+		{"outer fence stays", "- [ ] a\n- [ ] b\n  ```\n  x\n ```\n", 0, "- [ ] b\n  ```\n  x\n- [x] a\n ```\n"},
+		{"content below marker stays", "- [ ] a\n-\n  b\n- [x] c\n", 0, "- [x] a\n-\n  b\n- [x] c\n"},
+		{"loose list stays", "- [ ] a\n\n- [ ] b\n", 0, "- [x] a\n\n- [ ] b\n"},
 		{"already in place", "- [ ] a\n- [ ] b\n", 1, "- [ ] a\n- [x] b\n"},
 	}
 	for _, tt := range tests {

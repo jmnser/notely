@@ -64,7 +64,7 @@ func tasks(doc ast.Node) []*extast.TaskCheckBox {
 	return boxes
 }
 
-// toggle checks or unchecks task i of src. In a bullet list, the item then
+// toggle checks or unchecks task i of src. In a tight bullet list, the item then
 // moves below the list's other unchecked items, above its checked ones.
 func toggle(src string, i int) (string, bool) {
 	boxes := tasks(md.Parser().Parse(text.NewReader([]byte(src))))
@@ -83,29 +83,36 @@ func toggle(src string, i int) (string, bool) {
 }
 
 // sortItem moves list item li of src after the last of its siblings that is
-// not a checked task. Ordered lists and items it cannot delimit stay put.
+// not a checked task. Ordered and loose lists, and lists with items it cannot
+// delimit, stay put.
 func sortItem(src string, li ast.Node) string {
 	list, ok := li.Parent().(*ast.List)
-	if _, isItem := li.(*ast.ListItem); !ok || !isItem || list.IsOrdered() {
+	if _, isItem := li.(*ast.ListItem); !ok || !isItem || list.IsOrdered() || !list.IsTight {
 		return src
 	}
 	var starts []int
-	from, after := 0, 0
+	from, after, col := 0, 0, 0
 	for c := list.FirstChild(); c != nil; c = c.NextSibling() {
 		first := c.FirstChild()
 		if first == nil || first.Lines().Len() == 0 ||
 			first.Kind() != ast.KindTextBlock && first.Kind() != ast.KindParagraph {
 			return src
 		}
-		start := lineStart(src, first.Lines().At(0).Start)
+		o := first.Lines().At(0).Start
+		start := lineStart(src, o)
+		marker := strings.TrimLeft(src[start:o], " \t>")
+		if len(marker) < 2 || marker[0] != list.Marker || !strings.ContainsAny(marker[1:2], " \t") {
+			return src // the content does not start on the marker's line
+		}
 		if c == li {
 			from = len(starts)
 		} else if box, ok := first.FirstChild().(*extast.TaskCheckBox); !ok || !box.IsChecked {
 			after = len(starts) + 1
 		}
 		starts = append(starts, start)
+		col = o - start
 	}
-	end := itemEnd(src, list.LastChild(), starts[len(starts)-1])
+	end := itemEnd(src, list.LastChild(), starts[len(starts)-1], col)
 	added := end == len(src) && !strings.HasSuffix(src, "\n")
 	if added {
 		src += "\n"
@@ -113,11 +120,11 @@ func sortItem(src string, li ast.Node) string {
 	}
 	starts = append(starts, end)
 	var out string
-	switch to := after; {
-	case to < from:
-		out = src[:starts[to]] + src[starts[from]:starts[from+1]] + src[starts[to]:starts[from]] + src[starts[from+1]:]
-	case to > from+1:
-		out = src[:starts[from]] + src[starts[from+1]:starts[to]] + src[starts[from]:starts[from+1]] + src[starts[to]:]
+	switch {
+	case after < from:
+		out = src[:starts[after]] + src[starts[from]:starts[from+1]] + src[starts[after]:starts[from]] + src[starts[from+1]:]
+	case after > from+1:
+		out = src[:starts[from]] + src[starts[from+1]:starts[after]] + src[starts[from]:starts[from+1]] + src[starts[after]:]
 	default:
 		out = src
 	}
@@ -133,9 +140,9 @@ func lineStart(src string, o int) int {
 }
 
 // itemEnd returns the offset after the last line of list item li, which
-// starts at offset start of src: its last source line and any following lines
-// indented past its marker, such as a closing code fence.
-func itemEnd(src string, li ast.Node, start int) int {
+// starts at offset start of src with content at column col: its last source
+// line and any following lines indented to col, such as a closing code fence.
+func itemEnd(src string, li ast.Node, start, col int) int {
 	end := start
 	_ = ast.Walk(li, func(n ast.Node, entering bool) (ast.WalkStatus, error) {
 		if entering && n.Type() == ast.TypeBlock && n.Lines().Len() > 0 {
@@ -150,10 +157,9 @@ func itemEnd(src string, li ast.Node, start int) int {
 		}
 		end += i + 1
 	}
-	indent := indentOf(src[start:])
 	for end < len(src) {
 		line, _, _ := strings.Cut(src[end:], "\n")
-		if strings.TrimSpace(line) == "" || indentOf(line) <= indent {
+		if strings.TrimSpace(line) == "" || indentOf(line) < col {
 			return end
 		}
 		end += len(line) + 1
@@ -161,9 +167,10 @@ func itemEnd(src string, li ast.Node, start int) int {
 	return len(src)
 }
 
-// indentOf returns the length of the leading spaces and tabs of s.
+// indentOf returns the length of the leading spaces, tabs and blockquote
+// markers of s.
 func indentOf(s string) int {
-	return len(s) - len(strings.TrimLeft(s, " \t"))
+	return len(s) - len(strings.TrimLeft(s, " \t>"))
 }
 
 // mermaidBlocks marks fenced mermaid code blocks in html for Mermaid. Their
