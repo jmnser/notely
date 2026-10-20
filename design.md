@@ -17,7 +17,7 @@ browser (PWA, wasm) ──► notely-server ──► notes/*.md
 Imported only by files built with `!wasm`, so none of it reaches the browser; CI fails if the wasm imports it or grows beyond 11 MB.
 
 
-- API: `GET /api/notes`, `PUT /api/notes/{id}` (create or replace), `DELETE /api/notes/{id}`, `GET /healthz` (also outside `-base`); sign-on: `POST /api/login`, `POST /api/logout`, `GET /api/session`.
+- API: `GET /api/notes`, `PUT /api/notes/{id}` (create or replace), `DELETE /api/notes/{id}`, `GET /api/events` (change events), `GET /healthz` (also outside `-base`); sign-on: `POST /api/login`, `POST /api/logout`, `GET /api/session`.
 - Both writes are idempotent, so the frontend can safely retry them.
 - Notes live in memory; each one is also a Markdown file, written atomically and durably (temp file, fsync, rename, fsync of the directory) on every change. A failed write leaves the note unchanged.
 - `PUT` cleans the space path as the apps do and rejects titles over 200 characters, spaces over 1000, bodies over 100 000 and control characters in titles and spaces.
@@ -92,6 +92,7 @@ The app is local first:
 2. When changes pause for 500 ms, the state is written to `localStorage` and synced; when the page is hidden or closed, it is written at once. Saving keeps pending notes another tab stored that are newer than this tab's copy, so they sync on the next start rather than being lost; this tab does not push them, as their tab may still change them.
 3. A sync pushes pending notes and deletions, fetches the backend's list and merges it: pending local changes win, everything else comes from the backend.
 4. Syncs also run on start, on window focus, when the browser comes back online and every 30 s after a failure.
+5. While the page is visible and signed on, it keeps a server-sent event stream, `GET /api/events`, open and syncs when it opens and whenever another app changes a note, so changes show up within about a second. Each page sends a random client ID with its requests, in `X-Notely-Client`, and is not told about its own changes. The stream closes while the page is hidden, sends a heartbeat every 25 s for proxies, and ends when the server shuts down or before the next message once its session ends. Up to 10 streams per user and 100 in all are served. When the stream gives up, e.g. after a server restart signed the page out, the page syncs 30 s later, which shows the sign-in screen or reopens the stream.
 
 IDs are generated in the browser, which is what lets notes be created offline.
 

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -24,6 +25,10 @@ const (
 	post = "POST"
 	del  = "DELETE"
 )
+
+// clientID names this page to the backend, which then does not send it
+// events about its own changes.
+var clientID = rand.Text()
 
 // errSignedOut is returned when the backend needs a sign-on.
 var errSignedOut = errors.New("signed out")
@@ -108,10 +113,12 @@ func send(method, path string, body any, contentType string, limit time.Duration
 		"credentials": "same-origin",
 		"signal":      app.Window().Get("AbortSignal").Call("timeout", limit.Milliseconds()),
 	}
+	headers := map[string]any{"X-Notely-Client": clientID}
 	if body != nil {
 		init["body"] = body
-		init["headers"] = map[string]any{"Content-Type": contentType}
+		headers["Content-Type"] = contentType
 	}
+	init["headers"] = headers
 	res, err := await(app.Window().Call("fetch", rootPrefix()+path, init))
 	if err != nil {
 		return fmt.Errorf("%s %s: %w", method, path, err)

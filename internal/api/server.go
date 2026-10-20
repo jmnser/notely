@@ -12,7 +12,8 @@ import (
 // Server serves /api/ and /healthz.
 type Server struct {
 	http.Handler
-	sync *syncer
+	sync   *syncer
+	events *events
 }
 
 // Open loads the notes in dir and the users file, by default <dir>/.users.json,
@@ -40,9 +41,13 @@ func Open(dir, usersFile string) (*Server, error) {
 	ih := (&images{dir: filepath.Join(dir, imageDir)}).handler()
 	mux.Handle("/api/images", ih)
 	mux.Handle("/api/images/", ih)
-	mux.Handle("/", newHandler(s))
-	return &Server{Handler: newAuth(users).handler(mux), sync: sy}, nil
+	ev := newEvents()
+	mux.Handle("/", newHandler(s, ev))
+	return &Server{Handler: newAuth(users).handler(mux), sync: sy, events: ev}, nil
 }
+
+// Shutdown ends the open event streams. Call it once, when the server shuts down.
+func (s *Server) Shutdown() { s.events.close() }
 
 // RunSync backs up the notes every interval and on request until ctx is
 // done, then pushes the last changes. An interval of 0 syncs on request only.

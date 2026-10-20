@@ -11,8 +11,9 @@ import (
 	"time"
 )
 
-// Run serves h on addr until the process is interrupted.
-func Run(addr string, h http.Handler) error {
+// Run serves h on addr until the process is interrupted. onShutdown runs
+// when shutdown starts, e.g. to end long-lived responses.
+func Run(addr string, h http.Handler, onShutdown ...func()) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
@@ -22,6 +23,9 @@ func Run(addr string, h http.Handler) error {
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,
 		IdleTimeout:       2 * time.Minute,
+	}
+	for _, f := range onShutdown {
+		srv.RegisterOnShutdown(f)
 	}
 	errc := make(chan error, 1)
 	go func() { errc <- srv.ListenAndServe() }()

@@ -91,7 +91,7 @@ func main() {
 		Version:           version,
 		Resources:         rootResolver{ResourceResolver: app.PrefixedLocation(*base), root: *base + "/"},
 		RawHeaders:        []string{themeColorScript},
-	}}))
+	}}), srv.Shutdown)
 	if err != nil { // e.g. the address is in use: there is nothing new to back up
 		log.Fatal(err)
 	}
