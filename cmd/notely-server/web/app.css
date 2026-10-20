@@ -186,6 +186,12 @@ button {
   flex: 1;
   overflow-y: auto;
 }
+/* Material 3 divider between the note spaces and Assets */
+.tree .divider {
+  height: 1px;
+  margin: 8px 16px;
+  background: var(--md-outline-variant);
+}
 .space {
   display: flex;
   align-items: center;
