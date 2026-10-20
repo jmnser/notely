@@ -127,6 +127,7 @@ type asset struct {
 	Name     string    `json:"name"` // DNS label and extension
 	Space    string    `json:"space"`
 	Uploaded time.Time `json:"uploaded"`
+	Version  string    `json:"version"`
 }
 
 // key is the asset's path under /api/assets/.
@@ -143,7 +144,8 @@ func (a asset) stem() string {
 	return stem
 }
 
-func assetURL(a asset) string { return rootPrefix() + "/api/assets/" + a.key() }
+// assetURL loads asset a; naming its version lets the browser cache it.
+func assetURL(a asset) string { return rootPrefix() + "/api/assets/" + a.key() + "?v=" + a.Version }
 
 func listAssets() ([]asset, error) {
 	var list []asset

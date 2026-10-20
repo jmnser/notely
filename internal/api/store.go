@@ -1,6 +1,7 @@
 package api
 
 import (
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -26,14 +27,15 @@ type store struct {
 	dir   string
 	space string // a shared space's name: its notes' top space, left out of their paths
 	notes map[string]note.Note
-	paths map[string]string // id → file path relative to dir
+	paths map[string]string            // id → file path relative to dir
+	sums  map[string][sha256.Size]byte // asset version → SHA-256, see assetSum
 }
 
 func openStore(dir string) (*store, error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, err
 	}
-	s := &store{dir: dir, notes: map[string]note.Note{}, paths: map[string]string{}}
+	s := &store{dir: dir, notes: map[string]note.Note{}, paths: map[string]string{}, sums: map[string][sha256.Size]byte{}}
 	var stale []string // older files of a note, left by a crash while moving it
 	err := filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
 		switch {

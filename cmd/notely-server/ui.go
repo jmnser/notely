@@ -49,45 +49,46 @@ type prompt struct {
 type ui struct {
 	app.Compo
 
-	ctx       app.Context // mount context; outlives the elements that trigger events
-	mounted   bool
-	notes     []note.Note     // sorted
-	dirty     map[string]int  // note ID -> seq of its last change not yet pushed
-	deleted   []string        // note IDs whose deletion is not yet pushed
-	seq       int             // counts local changes
-	current   string          // ID of the open note
-	editing   bool            // the open note shows its Markdown source
-	collapsed map[string]bool // space paths whose content is hidden
-	drawer    bool            // the sidebar is collapsed to a rail on large screens
-	pinned    map[string]bool // pinned space paths, kept on this device
-	dialog    prompt
-	html      string // rendered htmlSrc
-	mermaid   int    // Mermaid loading state: 0 not loaded, 1 loading, 2 ready
-	htmlSrc   string // note ID and source of html
-	query     string
-	status    string
-	signedOut bool   // the backend asks for a sign-on
-	signingIn bool   // a sign-on request is running
-	loginErr  string // why the last sign-on failed
-	backup    syncInfo
-	backupMsg string   // git backup status shown in its dialog
-	images    []string // names of the images next to the open note, in their dialog
-	assets    []asset  // the Assets space, newest first
-	asset     string   // key of the open asset
-	uploadTo  string   // Assets subspace the asset file picker uploads to
-	imagesMsg string   // images dialog status
-	syncing   bool
-	again     bool // a sync was requested while one was running
-	retries   bool // a retry of a failed sync is scheduled
-	syncGen   int  // bumped on sign-out, so results of older syncs are dropped
-	saved     int  // seq when last persisted
-	update    bool // a new app version is available
-	backDepth int  // history entries pushed for in-app back steps, see syncBack
-	skipPop   int  // popstate events caused by syncBack itself
-	events    *eventSource
-	shared    []string // the user's shared spaces, top-level spaces other users see too
-	user      string   // the signed-on user, or the last one
-	discard   string   // a user signing in again to discard another user's unsynced changes
+	ctx          app.Context // mount context; outlives the elements that trigger events
+	mounted      bool
+	notes        []note.Note     // sorted
+	dirty        map[string]int  // note ID -> seq of its last change not yet pushed
+	deleted      []string        // note IDs whose deletion is not yet pushed
+	seq          int             // counts local changes
+	current      string          // ID of the open note
+	editing      bool            // the open note shows its Markdown source
+	collapsed    map[string]bool // space paths whose content is hidden
+	drawer       bool            // the sidebar is collapsed to a rail on large screens
+	pinned       map[string]bool // pinned space paths, kept on this device
+	dialog       prompt
+	html         string // rendered htmlSrc
+	mermaid      int    // Mermaid loading state: 0 not loaded, 1 loading, 2 ready
+	htmlSrc      string // note ID and source of html
+	query        string
+	status       string
+	signedOut    bool   // the backend asks for a sign-on
+	signingIn    bool   // a sign-on request is running
+	loginErr     string // why the last sign-on failed
+	backup       syncInfo
+	backupMsg    string   // git backup status shown in its dialog
+	images       []string // names of the images next to the open note, in their dialog
+	assets       []asset  // the Assets space, newest first
+	asset        string   // key of the open asset
+	uploadTo     string   // Assets subspace the asset file picker uploads to
+	assetsLoaded bool     // assets were requested since signing on
+	imagesMsg    string   // images dialog status
+	syncing      bool
+	again        bool // a sync was requested while one was running
+	retries      bool // a retry of a failed sync is scheduled
+	syncGen      int  // bumped on sign-out, so results of older syncs are dropped
+	saved        int  // seq when last persisted
+	update       bool // a new app version is available
+	backDepth    int  // history entries pushed for in-app back steps, see syncBack
+	skipPop      int  // popstate events caused by syncBack itself
+	events       *eventSource
+	shared       []string // the user's shared spaces, top-level spaces other users see too
+	user         string   // the signed-on user, or the last one
+	discard      string   // a user signing in again to discard another user's unsynced changes
 }
 
 // eventSource is an open stream of the backend's change events.
@@ -752,8 +753,10 @@ func (u *ui) signIn(ctx app.Context, e app.Event) {
 			default:
 				if u.user != "" && u.user != user { // another user's notes
 					u.notes, u.dirty, u.deleted = nil, map[string]int{}, nil
+					u.assets, u.asset = nil, ""
 					u.open("")
 				}
+				u.assetsLoaded = false
 				u.user, u.discard = user, ""
 				u.signedOut = false
 				ctx.LocalStorage().Del(signedOutKey)
@@ -780,7 +783,7 @@ func (u *ui) signOut(app.Context, app.Event) {
 				}
 			})
 			u.notes, u.dirty, u.deleted = nil, map[string]int{}, nil
-			u.assets, u.asset = nil, ""
+			u.assets, u.asset, u.assetsLoaded = nil, "", false
 			u.syncGen++
 			u.syncing, u.again = false, false
 			u.ctx.LocalStorage().Del(storageKey)
@@ -977,6 +980,9 @@ func (u *ui) insertImages(files app.Value) {
 				u.status = "Could not upload the image: " + err.Error()
 			default:
 				u.status = ""
+			}
+			if text.Len() > 0 {
+				u.loadAssets(nil) // uploads to notes are listed in Assets too
 			}
 			if text.Len() > 0 && u.current == id && u.editing {
 				u.insertText(text.String())
@@ -1368,7 +1374,9 @@ func (u *ui) sync(app.Context) {
 			}
 			u.deleted = u.deleted[len(deleted):]
 			u.notes = note.Merge(remote, u.notes, u.dirty, u.deleted)
-			u.loadAssets()
+			if !u.assetsLoaded { // note syncs do not change assets
+				u.loadAssets(nil)
+			}
 			if _, ok := u.dirty[u.current]; !ok {
 				u.open(u.current) // show changes made elsewhere
 			}

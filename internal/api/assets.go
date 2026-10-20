@@ -1,12 +1,11 @@
 package api
 
 import (
-	"bytes"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"io/fs"
 	"log"
-	"maps"
 	"net/http"
 	"os"
 	"path"
@@ -31,6 +30,15 @@ const (
 // and dashes, starting and ending with a letter or digit.
 var dnsLabel = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$`)
 
+// imageExts holds the extensions of imageTypes.
+var imageExts = func() map[string]bool {
+	m := map[string]bool{}
+	for _, ext := range imageTypes {
+		m[ext] = true
+	}
+	return m
+}()
+
 var errBadLabel = errors.New("use up to 63 lower case letters, digits and -, " +
 	"starting and ending with a letter or digit")
 
@@ -39,6 +47,16 @@ type asset struct {
 	Name     string    `json:"name"`            // DNS label and extension
 	Space    string    `json:"space,omitempty"` // subspace, a DNS label
 	Uploaded time.Time `json:"uploaded"`
+	Version  string    `json:"version"` // changes with the content; ?v=<version> URLs are cached
+}
+
+func newAsset(name, space string, info fs.FileInfo) asset {
+	return asset{Name: name, Space: space, Uploaded: info.ModTime().UTC(), Version: version(info)}
+}
+
+// version identifies the content of an asset file; renames keep it.
+func version(info fs.FileInfo) string {
+	return strconv.FormatInt(info.ModTime().UnixNano(), 36) + "-" + strconv.FormatInt(info.Size(), 36)
 }
 
 // label turns a file name without its extension into a DNS label.
@@ -68,7 +86,7 @@ func label(file string) string {
 // not valid.
 func assetPath(space, name string) (string, bool) {
 	stem, ext := strings.TrimSuffix(name, path.Ext(name)), path.Ext(name)
-	if !dnsLabel.MatchString(stem) || !slices.Contains(slices.Collect(maps.Values(imageTypes)), ext) ||
+	if !dnsLabel.MatchString(stem) || !imageExts[ext] ||
 		space != "" && !dnsLabel.MatchString(space) {
 		return "", false
 	}
@@ -96,7 +114,7 @@ func (s *store) assets(root *os.Root) ([]asset, error) {
 		if err != nil {
 			return err
 		}
-		list = append(list, asset{Name: name, Space: space, Uploaded: info.ModTime().UTC()})
+		list = append(list, newAsset(name, space, info))
 		return nil
 	})
 	slices.SortStableFunc(list, func(a, b asset) int { return b.Uploaded.Compare(a.Uploaded) })
@@ -127,33 +145,51 @@ func (s *store) addAsset(data []byte, ext, file, space string) (asset, error) {
 	if err != nil {
 		return asset{}, err
 	}
+	sum := sha256.Sum256(data)
 	for _, a := range list {
-		p, _ := assetPath(a.Space, a.Name)
-		if info, err := root.Stat(p); err != nil || info.Size() != int64(len(data)) {
-			continue
+		if !strings.HasSuffix(a.Version, "-"+strconv.FormatInt(int64(len(data)), 36)) {
+			continue // another size
 		}
-		if old, err := root.ReadFile(p); err == nil && bytes.Equal(old, data) {
+		if old, err := s.assetSum(root, a); err == nil && old == sum {
 			return a, nil
 		}
 	}
-	stem := label(file)
+	base := label(file)
+	stem := base
 	for i := 2; taken(list, space, stem, ""); i++ {
 		suffix := "-" + strconv.Itoa(i)
-		stem = strings.TrimRight(label(file)[:min(len(label(file)), maxLabel-len(suffix))], "-") + suffix
+		stem = strings.TrimRight(base[:min(len(base), maxLabel-len(suffix))], "-") + suffix
 	}
 	if err := root.MkdirAll(path.Join(assetDir, space), 0o700); err != nil {
 		return asset{}, err
 	}
-	a := asset{Name: stem + ext, Space: space}
-	p, _ := assetPath(space, a.Name)
+	p, _ := assetPath(space, stem+ext)
 	if err := writeFile(root, p, data); err != nil {
 		return asset{}, err
 	}
 	info, err := root.Stat(p)
-	if err == nil {
-		a.Uploaded = info.ModTime().UTC()
+	if err != nil {
+		return asset{}, err
 	}
-	return a, err
+	a := newAsset(stem+ext, space, info)
+	s.sums[a.Version] = sum
+	return a, nil
+}
+
+// assetSum returns the SHA-256 of asset a, hashing each version once. Call
+// with s.mu held.
+func (s *store) assetSum(root *os.Root, a asset) ([sha256.Size]byte, error) {
+	if sum, ok := s.sums[a.Version]; ok {
+		return sum, nil
+	}
+	p, _ := assetPath(a.Space, a.Name)
+	data, err := root.ReadFile(p)
+	if err != nil {
+		return [sha256.Size]byte{}, err
+	}
+	sum := sha256.Sum256(data)
+	s.sums[a.Version] = sum
+	return sum, nil
 }
 
 // moveAsset renames asset space/name to label stem in subspace to, keeping
@@ -304,14 +340,16 @@ func (s *store) serveAsset(w http.ResponseWriter, r *http.Request) {
 		serverError(w, err)
 		return
 	}
-	for typ, ext := range imageTypes {
-		if ext == path.Ext(name) {
-			w.Header().Set("Content-Type", typ)
-		}
+	// A name can get other content: only a URL naming the version is cached.
+	// The ETag, not the modification time, revalidates, as renames keep it.
+	v := version(info)
+	cache := "private, no-cache"
+	if r.URL.Query().Get("v") == v {
+		cache = "private, max-age=31536000, immutable"
 	}
-	w.Header().Set("Cache-Control", "private, no-cache") // a name can get other content
-	w.Header().Set("Content-Security-Policy", "default-src 'none'; sandbox; frame-ancestors 'none'")
-	http.ServeContent(w, r, name, info.ModTime(), f)
+	w.Header().Set("ETag", `"`+v+`"`)
+	imageHeaders(w, name, cache)
+	http.ServeContent(w, r, name, time.Time{}, f)
 }
 
 // putAsset renames or moves an asset: {"name": "<label>", "space": "<label>"}.

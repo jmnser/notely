@@ -79,8 +79,22 @@ func TestAssets(t *testing.T) {
 	}
 
 	w := request(t, h, http.MethodGet, "/api/assets/pets/my-cat.gif", "")
-	if w.Code != http.StatusOK || w.Header().Get("Content-Type") != "image/gif" || !bytes.Equal(w.Body.Bytes(), buf.Bytes()) {
+	if w.Code != http.StatusOK || w.Header().Get("Content-Type") != "image/gif" || !bytes.Equal(w.Body.Bytes(), buf.Bytes()) ||
+		w.Header().Get("Cache-Control") != "private, no-cache" || w.Header().Get("Last-Modified") != "" {
 		t.Errorf("get: %d %v", w.Code, w.Header())
+	}
+	if w := request(t, h, http.MethodGet, "/api/assets/pets/my-cat.gif", "", "If-None-Match", w.Header().Get("ETag")); w.Code != http.StatusNotModified {
+		t.Errorf("revalidate: %d", w.Code)
+	}
+	var gifAsset asset
+	for _, a := range listAssets(t, h) {
+		if a.Space == "pets" {
+			gifAsset = a
+		}
+	}
+	w = request(t, h, http.MethodGet, "/api/assets/pets/my-cat.gif?v="+gifAsset.Version, "")
+	if !strings.Contains(w.Header().Get("Cache-Control"), "immutable") {
+		t.Errorf("versioned get: %v", w.Header())
 	}
 
 	for _, c := range []struct {

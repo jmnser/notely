@@ -86,6 +86,8 @@ updated: 2026-10-15T09:12:00.123Z
 - Names and subspaces are DNS labels as in Kubernetes (RFC 1123): up to 63 lower case letters, digits and `-`, starting and ending with a letter or digit; the extension is not counted. Uploads are named after the file, lower-cased with other characters turned into `-` and cut to 63, `image` if nothing is left, with `-2`, `-3`, … on collisions within a subspace; the same image is listed once.
 - API: `GET /api/assets`, `POST /api/assets?name=<file>&space=<subspace>`, `GET`, `PUT` (`{"name", "space"}`: rename or move) and `DELETE /api/assets/[<subspace>/]<name>.<ext>`. Image uploads to notes take `?name=<file>` for their asset name. A subspace exists while it holds images.
 - Deleting an asset keeps the copies next to notes.
+- Assets carry a `version` (modification time and size, kept by renames). `?v=<version>` URLs are cached as immutable; others revalidate by that ETag, as a name can get other content.
+- Uploads compare the SHA-256 of the image with the assets', hashing each asset version once per server run.
 
 ## Frontend: `cmd/notely-server`
 

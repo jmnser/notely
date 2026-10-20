@@ -148,23 +148,36 @@ func (u *ui) findAsset(key string) *asset {
 
 // openAsset shows asset key in the main pane, or closes it for "".
 func (u *ui) openAsset(key string) {
+	u.asset = key // first, so that open keeps the history entry
 	if key != "" {
 		u.open("")
 	}
-	u.asset = key
 	u.syncBack()
 }
 
-// loadAssets fetches the user's assets.
-func (u *ui) loadAssets() {
+// loadAssets fetches the user's assets, closes the open one if it is gone and
+// then calls then, if not nil.
+func (u *ui) loadAssets(then func()) {
+	gen := u.syncGen
+	u.assetsLoaded = true
 	u.ctx.Async(func() {
 		list, err := listAssets()
 		u.ctx.Dispatch(func(app.Context) {
+			if gen != u.syncGen { // signed out meanwhile
+				return
+			}
 			if err != nil {
 				app.Log(err)
+				u.assetsLoaded = false // retried on the next sync
 				return
 			}
 			u.assets = list
+			if u.asset != "" && u.findAsset(u.asset) == nil {
+				u.openAsset("")
+			}
+			if then != nil {
+				then()
+			}
 		})
 	})
 }
@@ -186,6 +199,7 @@ func (u *ui) uploadAssets(files app.Value, space string) {
 		return
 	}
 	u.status = "Uploading image…"
+	gen := u.syncGen
 	u.ctx.Async(func() {
 		var last asset
 		var err error
@@ -195,11 +209,13 @@ func (u *ui) uploadAssets(files app.Value, space string) {
 			}
 		}
 		u.ctx.Dispatch(func(app.Context) {
-			u.assetDone(err, "Could not upload the image: ")
-			if err == nil {
-				u.expandAssets(space)
+			u.assetDone(gen, err, "Could not upload the image: ", func() {
+				if last.Space != space {
+					u.status = "Already in Assets as " + last.key() + "."
+				}
+				u.expandAssets(last.Space) // the same image is listed once
 				u.openAsset(last.key())
-			}
+			})
 		})
 	})
 }
@@ -210,32 +226,35 @@ func (u *ui) expandAssets(space string) {
 	delete(u.collapsed, assetsKey+"/"+space)
 }
 
-// assetDone reports the outcome of an asset request and reloads the assets.
-func (u *ui) assetDone(err error, failed string) {
+// assetDone reports the outcome of an asset request started in sign-on gen,
+// reloads the assets and then, on success, calls then if not nil.
+func (u *ui) assetDone(gen int, err error, failed string, then func()) {
 	switch {
+	case gen != u.syncGen: // signed out meanwhile
+		return
 	case errors.Is(err, errSignedOut):
 		u.signedOut, u.status = true, ""
 		u.listen()
 		return
 	case err != nil:
 		u.status = failed + err.Error()
+		then = nil
 	default:
 		u.status = ""
 	}
-	u.loadAssets()
+	u.loadAssets(then)
 }
 
-// changeAsset renames or moves asset a and opens it under its new name.
+// changeAsset renames or moves asset a and keeps it open under its new name.
 func (u *ui) changeAsset(a asset, name, space string) {
-	open := u.asset == a.key()
+	open, gen := u.asset == a.key(), u.syncGen
 	u.ctx.Async(func() {
 		moved, err := putAsset(a, name, space)
 		u.ctx.Dispatch(func(app.Context) {
-			u.assetDone(err, "Not changed: ")
 			if err == nil && open {
-				u.expandAssets(moved.Space)
-				u.asset = moved.key()
+				u.asset = moved.key() // before the reload, which closes a gone asset
 			}
+			u.assetDone(gen, err, "Not changed: ", func() { u.expandAssets(moved.Space) })
 		})
 	})
 }
@@ -284,9 +303,10 @@ func (u *ui) removeAsset(a asset) {
 			if u.asset == a.key() {
 				u.openAsset("")
 			}
+			gen := u.syncGen
 			u.ctx.Async(func() {
 				err := call(del, "/api/assets/"+a.key(), nil, nil)
-				u.ctx.Dispatch(func(app.Context) { u.assetDone(err, "Not deleted: ") })
+				u.ctx.Dispatch(func(app.Context) { u.assetDone(gen, err, "Not deleted: ", nil) })
 			})
 		},
 	}, "")
