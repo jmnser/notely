@@ -66,7 +66,8 @@ func tasks(doc ast.Node) []*extast.TaskCheckBox {
 }
 
 // toggle checks or unchecks task i of src and groups its list: unchecked
-// and plain items first, then checked ones, the item just checked on top.
+// and plain items first, then checked ones. A just checked item leads the
+// checked ones, a just unchecked one ends the unchecked ones.
 func toggle(src string, i int) (string, bool) {
 	boxes := tasks(md.Parser().Parse(text.NewReader([]byte(src))))
 	if i < 0 || i >= len(boxes) {
@@ -92,8 +93,9 @@ type item struct {
 // items, then the toggled item, then the other checked items, each group in
 // its order. The toggled item thus ends the unchecked or leads the checked
 // ones. Each position keeps its marker and blank lines,
-// so numbering and spacing stay. Lists with an item whose text does not start
-// on its marker's line stay put.
+// so numbering and spacing stay. Lists stay put if an item's text does not
+// start on its marker's line, or if items with several lines have markers of
+// different widths.
 func group(src string, box *extast.TaskCheckBox) string {
 	li := box.Parent().Parent()
 	list, ok := li.Parent().(*ast.List)
@@ -101,7 +103,7 @@ func group(src string, box *extast.TaskCheckBox) string {
 		return src
 	}
 	var starts, marks []int
-	col := 0
+	col, cols := 0, map[int]bool{}
 	for c := list.FirstChild(); c != nil; c = c.NextSibling() {
 		first := c.FirstChild()
 		if first == nil || first.Lines().Len() == 0 ||
@@ -116,6 +118,7 @@ func group(src string, box *extast.TaskCheckBox) string {
 		}
 		starts, marks = append(starts, start), append(marks, start+m)
 		col = o - start
+		cols[col] = true
 	}
 	end := itemEnd(src, list.LastChild(), starts[len(starts)-1], col)
 	added := end == len(src) && !strings.HasSuffix(src, "\n")
@@ -128,12 +131,19 @@ func group(src string, box *extast.TaskCheckBox) string {
 	var items []item
 	var unchecked, checked []string
 	var toggled string
+	quotes := strings.Count(src[starts[0]:marks[0]], ">")
 	i := 0
 	for c := list.FirstChild(); c != nil; c, i = c.NextSibling(), i+1 {
-		chunk := src[marks[i]:starts[i+1]]
-		body := strings.TrimRightFunc(chunk, func(r rune) bool { return strings.ContainsRune(" \t>\n", r) })
-		body = chunk[:len(body)+strings.IndexByte(chunk[len(body):], '\n')+1]
-		items = append(items, item{marker: src[starts[i]:marks[i]], body: body, blank: chunk[len(body):]})
+		lines := strings.SplitAfter(src[marks[i]:starts[i+1]], "\n")
+		n := len(lines)
+		for n > 1 && strings.Count(lines[n-1], ">") <= quotes && strings.Trim(lines[n-1], " \t>\r\n") == "" {
+			n--
+		}
+		if n > 1 && len(cols) > 1 {
+			return src // its nested lines would need another indent elsewhere
+		}
+		body := strings.Join(lines[:n], "")
+		items = append(items, item{marker: src[starts[i]:marks[i]], body: body, blank: strings.Join(lines[n:], "")})
 		b, isTask := c.FirstChild().FirstChild().(*extast.TaskCheckBox)
 		switch {
 		case b == box:
@@ -157,17 +167,20 @@ func group(src string, box *extast.TaskCheckBox) string {
 	return out.String()
 }
 
-// markerEnd returns the length of the indent and list marker that line, up to
-// an item's text, starts with, or -1 if it is not just that.
+// markerEnd returns the length of line, the text before an item's content,
+// up to and including the item's list marker, or -1 if it does not end in one.
 func markerEnd(line string, list *ast.List) int {
-	rest := strings.TrimLeft(line, " \t>")
-	if list.IsOrdered() {
-		rest = strings.TrimLeft(rest, "0123456789")
-	}
-	if len(rest) < 2 || rest[0] != list.Marker || !strings.ContainsAny(rest[1:2], " \t") {
+	rest := strings.TrimRight(line, " \t")
+	if rest == line || !strings.HasSuffix(rest, string(list.Marker)) {
 		return -1
 	}
-	return len(line) - len(rest) + 1
+	if list.IsOrdered() {
+		num := strings.TrimRight(rest[:len(rest)-1], "0123456789")
+		if len(num) == len(rest)-1 {
+			return -1
+		}
+	}
+	return len(rest)
 }
 
 // lineStart returns the offset of the line containing offset o of src.

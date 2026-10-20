@@ -87,6 +87,12 @@ func TestToggleGroups(t *testing.T) {
 		{"outer fence stays", "- [ ] a\n- [ ] b\n  ```\n  x\n ```\n", 0, "- [ ] b\n  ```\n  x\n- [x] a\n ```\n"},
 		{"content below marker stays", "- [ ] a\n-\n  b\n- [x] c\n", 0, "- [x] a\n-\n  b\n- [x] c\n"},
 		{"loose list", "- [ ] a\n\n- [ ] b\n", 0, "- [ ] b\n\n- [x] a\n"},
+		{"outer marker on the line", "- - [ ] a\n  - [ ] b\n", 0, "- - [ ] b\n  - [x] a\n"},
+		{"ordered in ordered", "1. 1. [ ] a\n   2. [ ] b\n", 0, "1. 1. [ ] b\n   2. [x] a\n"},
+		{"widths differ with nested lines", "9. [ ] a\n   - n\n10. [ ] b\n", 0, "9. [x] a\n   - n\n10. [ ] b\n"},
+		{"widths differ on one line", "9. [ ] a\n10. [ ] b\n", 0, "9. [ ] b\n10. [x] a\n"},
+		{"crlf loose", "- [ ] a\r\n\r\n- [ ] b\r\n\r\ntext\r\n", 0, "- [ ] b\r\n\r\n- [x] a\r\n\r\ntext\r\n"},
+		{"nested quote line moves", "- [ ] a\n- [ ] b\n  > q\n  >\n- [ ] c\n", 1, "- [ ] a\n- [ ] c\n- [x] b\n  > q\n  >\n"},
 		{"blockquote", "> - [ ] a\n> - [ ] b\n", 0, "> - [ ] b\n> - [x] a\n"},
 		{"already in place", "- [ ] a\n- [ ] b\n", 1, "- [ ] a\n- [x] b\n"},
 	}
