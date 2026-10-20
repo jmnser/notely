@@ -58,6 +58,31 @@ func TestToggle(t *testing.T) {
 	}
 }
 
+func TestToggleSorts(t *testing.T) {
+	tests := []struct {
+		name, src string
+		i         int
+		want      string
+	}{
+		{"check moves above checked", "- [ ] a\n- [ ] b\n- [x] c\n", 0, "- [ ] b\n- [x] a\n- [x] c\n"},
+		{"uncheck moves below unchecked", "- [ ] a\n- [x] b\n- [x] c\n", 2, "- [ ] a\n- [ ] c\n- [x] b\n"},
+		{"no newline at end", "- [ ] a\n- [ ] b", 0, "- [ ] b\n- [x] a"},
+		{"plain items count as unchecked", "- [ ] a\n- b\n- [x] c", 0, "- b\n- [x] a\n- [x] c"},
+		{
+			"nested and fenced lines move along", "- [ ] a\n  - [ ] a1\n- [ ] b\n  ```\n  x\n  ```\n\nend\n", 0,
+			"- [ ] b\n  ```\n  x\n  ```\n- [x] a\n  - [ ] a1\n\nend\n",
+		},
+		{"nested list sorts alone", "- [ ] a\n  - [ ] a1\n  - [ ] a2\n- [ ] b\n", 1, "- [ ] a\n  - [ ] a2\n  - [x] a1\n- [ ] b\n"},
+		{"ordered list stays", "1. [ ] a\n2. [ ] b\n", 0, "1. [x] a\n2. [ ] b\n"},
+		{"already in place", "- [ ] a\n- [ ] b\n", 1, "- [ ] a\n- [x] b\n"},
+	}
+	for _, tt := range tests {
+		if got, ok := toggle(tt.src, tt.i); got != tt.want || !ok {
+			t.Errorf("%s: toggle(%q, %d) = %q, %v, want %q", tt.name, tt.src, tt.i, got, ok, tt.want)
+		}
+	}
+}
+
 func TestRenderMermaid(t *testing.T) {
 	got := render("```mermaid\ngraph TD\n  A-->B[\"<b>x</b>\"]\n```\n\n```go\nx\n```\n", "")
 	want := `<pre class="mermaid">graph TD
