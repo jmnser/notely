@@ -525,14 +525,20 @@ main {
 .markdown a {
   color: var(--md-primary);
 }
-.markdown li:has(> input[type="checkbox"]) {
+.markdown li:has(> input[type="checkbox"], > p:first-child > input[type="checkbox"]) {
   list-style: none;
 }
-.markdown li:has(> input:checked) {
+.markdown li:has(> input:checked, > p:first-child > input:checked) {
   color: var(--md-on-surface-variant);
   text-decoration: line-through;
 }
-.markdown li > input[type="checkbox"] {
+.markdown li:not(:has(> input:checked, > p:first-child > input:checked)) + li:has(> input:checked, > p:first-child > input:checked) {
+  margin: 8px 0 0 -26px;
+  padding: 8px 0 0 26px;
+  border-top: 1px solid var(--md-outline-variant);
+}
+.markdown li > input[type="checkbox"],
+.markdown li > p:first-child > input[type="checkbox"] {
   width: 18px;
   height: 18px;
   margin: 0 8px 0 -26px;
