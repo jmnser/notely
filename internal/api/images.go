@@ -75,7 +75,8 @@ func (s *store) putImage(id string, data []byte) (string, error) {
 	}
 	defer root.Close() //nolint:errcheck
 	rel := path.Join(filepath.ToSlash(dir), name)
-	if _, err := root.Stat(rel); err == nil {
+	// A file cut short, e.g. by a crash, is replaced.
+	if fi, err := root.Stat(rel); err == nil && fi.Size() == int64(len(data)) {
 		now := time.Now()
 		return name, root.Chtimes(rel, now, now)
 	}
@@ -159,24 +160,30 @@ func (s *store) images(id string) ([]string, error) {
 	return names, nil
 }
 
-// copyImages copies the images body references from directory from to to,
-// when a note moves there. Call with s.mu held.
-func (s *store) copyImages(body, from, to string) {
-	if from == to {
+// copyImages copies the images body references from directory from, of any
+// store, to directory to, relative to s.dir, when a note moves there. Call
+// with s.mu held.
+func (s *store) copyImages(from, body, to string) {
+	if filepath.Clean(from) == filepath.Join(s.dir, to) {
 		return
 	}
-	root, err := os.OpenRoot(s.dir)
-	if err != nil {
+	src, err := os.OpenRoot(from)
+	if errors.Is(err, fs.ErrNotExist) {
+		return
+	}
+	root, err2 := os.OpenRoot(s.dir)
+	if err = errors.Join(err, err2); err != nil {
 		log.Print(err)
 		return
 	}
+	defer src.Close()  //nolint:errcheck
 	defer root.Close() //nolint:errcheck
 	for _, name := range slices.Compact(slices.Sorted(slices.Values(imageRef.FindAllString(body, -1)))) {
-		src, dst := path.Join(filepath.ToSlash(from), name), path.Join(filepath.ToSlash(to), name)
+		dst := path.Join(filepath.ToSlash(to), name)
 		if _, err := root.Stat(dst); err == nil {
 			continue
 		}
-		data, err := root.ReadFile(src)
+		data, err := src.ReadFile(name)
 		if errors.Is(err, fs.ErrNotExist) {
 			continue
 		}
@@ -184,7 +191,50 @@ func (s *store) copyImages(body, from, to string) {
 			err = writeFile(root, dst, data)
 		}
 		if err != nil {
-			log.Printf("copy image %s: %v", src, err)
+			log.Printf("copy image %s: %v", filepath.Join(from, name), err)
+		}
+	}
+}
+
+// importImages copies the images body references from note id's directory in
+// store from, or anywhere in it for references of the former layout, to its
+// directory in s, when the note moves between stores.
+func (s *store) importImages(id, body string, from *store) {
+	from.mu.Lock()
+	dir, ok := from.noteDir(id)
+	from.mu.Unlock()
+	if !ok {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	to, ok := s.noteDir(id)
+	if !ok {
+		return
+	}
+	s.copyImages(filepath.Join(from.dir, dir), body, to)
+	root, err := os.OpenRoot(s.dir)
+	if err != nil {
+		log.Print(err)
+		return
+	}
+	defer root.Close() //nolint:errcheck
+	for _, name := range imageRef.FindAllString(body, -1) {
+		dst := path.Join(filepath.ToSlash(to), name)
+		if _, err := root.Stat(dst); err == nil {
+			continue
+		}
+		f, err := from.findImage(name)
+		if err != nil {
+			continue
+		}
+		data, err := io.ReadAll(io.LimitReader(f, maxImage+1))
+		_ = f.Close()
+		if err == nil {
+			err = writeFile(root, dst, data)
+		}
+		if err != nil {
+			log.Printf("copy image %s: %v", name, err)
 		}
 	}
 }
@@ -258,18 +308,29 @@ func nextCleanup(now time.Time) time.Time {
 }
 
 func (s *store) uploadImage(w http.ResponseWriter, r *http.Request) {
+	if data, ok := readImage(w, r); ok {
+		name, err := s.putImage(r.PathValue("id"), data)
+		writeImage(w, r, name, err)
+	}
+}
+
+// readImage reads an uploaded image, or answers why it cannot.
+func readImage(w http.ResponseWriter, r *http.Request) ([]byte, bool) {
 	// The server's read timeout is too short for 2 MiB over a slow phone link.
 	_ = http.NewResponseController(w).SetReadDeadline(time.Now().Add(2 * time.Minute))
 	data, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxImage))
 	if _, ok := errors.AsType[*http.MaxBytesError](err); ok {
 		http.Error(w, "image larger than 2 MiB", http.StatusBadRequest)
-		return
+		return nil, false
 	} else if err != nil {
 		http.Error(w, "invalid request", http.StatusBadRequest)
-		return
+		return nil, false
 	}
-	id := r.PathValue("id")
-	name, err := s.putImage(id, data)
+	return data, true
+}
+
+// writeImage answers an upload stored as name, or failed with err.
+func writeImage(w http.ResponseWriter, r *http.Request, name string, err error) {
 	switch {
 	case errors.Is(err, errBadImage):
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -277,7 +338,7 @@ func (s *store) uploadImage(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "no such note", http.StatusNotFound)
 	case err != nil:
 		serverError(w, err)
-	case id == "": // POST /api/images of app versions before images moved next to notes
+	case r.PathValue("id") == "": // POST /api/images of app versions before images moved next to notes
 		writeJSON(w, map[string]string{"path": "/images/" + name})
 	default:
 		writeJSON(w, map[string]string{"name": name})

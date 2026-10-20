@@ -2,6 +2,7 @@ package api
 
 import (
 	"errors"
+	"fmt"
 	"io/fs"
 	"log"
 	"maps"
@@ -39,16 +40,7 @@ func migrate(dir string, users map[string]argonHash) error {
 	case err == nil && string(state) == usersDir:
 		return nil
 	case errors.Is(err, fs.ErrNotExist):
-		if err := os.MkdirAll(dir, 0o700); err != nil {
-			return err
-		}
-		// Without the marker, a users directory is a space of the old layout.
-		if _, err := os.Stat(filepath.Join(dir, usersDir)); err == nil {
-			if err := os.Rename(filepath.Join(dir, usersDir), filepath.Join(dir, oldUsersSpace)); err != nil {
-				return err
-			}
-		}
-		if err := atomicfile.WriteFile(marker, []byte("migrating")); err != nil {
+		if err := startMigration(dir, marker); err != nil {
 			return err
 		}
 	case err != nil:
@@ -106,6 +98,32 @@ func migrate(dir string, users map[string]argonHash) error {
 		log.Printf("left %s: %v", oldSyncDir, err) // state of removed users
 	}
 	return atomicfile.WriteFile(marker, []byte(usersDir))
+}
+
+// startMigration marks the migration of dir as started, moving a former
+// space named like usersDir aside.
+func startMigration(dir, marker string) error {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	// Without the marker, a users directory is a space of the old layout,
+	// which holds no directories.
+	if hasDirs(filepath.Join(dir, usersDir)) {
+		return fmt.Errorf("%s has user directories but no %s: restore it with the content %q",
+			dir, layoutFile, usersDir)
+	}
+	if _, err := os.Stat(filepath.Join(dir, usersDir)); err == nil {
+		if err := os.Rename(filepath.Join(dir, usersDir), filepath.Join(dir, oldUsersSpace)); err != nil {
+			return err
+		}
+	}
+	return atomicfile.WriteFile(marker, []byte("migrating"))
+}
+
+// hasDirs reports whether dir has subdirectories.
+func hasDirs(dir string) bool {
+	entries, _ := os.ReadDir(dir)
+	return slices.ContainsFunc(entries, fs.DirEntry.IsDir)
 }
 
 // copyTree copies the directories, .md files and images of from to to,

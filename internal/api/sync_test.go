@@ -240,6 +240,7 @@ func TestBackupTransportRefusesInternal(t *testing.T) {
 	for addr, refused := range map[string]bool{
 		"127.0.0.1:443": true, "[::1]:443": true, "169.254.169.254:443": true, "[::ffff:127.0.0.1]:443": true,
 		"0.0.0.0:443": true, "192.168.1.10:443": false, "140.82.112.3:443": false,
+		"100.101.102.103:443": true, "[fd7a:115c:a1e0::1]:443": true,
 	} {
 		if err := refuseInternal("tcp", addr, nil); (err != nil) != refused {
 			t.Errorf("refuseInternal(%s) = %v, want refused %v", addr, err, refused)

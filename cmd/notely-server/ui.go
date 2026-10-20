@@ -27,6 +27,7 @@ const (
 
 // cache is the state kept in the browser's local storage.
 type cache struct {
+	User    string // signed on when the notes were cached
 	Notes   []note.Note
 	Dirty   []string
 	Deleted []string
@@ -81,6 +82,9 @@ type ui struct {
 	backDepth int  // history entries pushed for in-app back steps, see syncBack
 	skipPop   int  // popstate events caused by syncBack itself
 	events    *eventSource
+	shared    []string // the user's shared spaces, top-level spaces other users see too
+	user      string   // the signed-on user, or the last one
+	discard   string   // a user signing in again to discard another user's unsynced changes
 }
 
 // eventSource is an open stream of the backend's change events.
@@ -112,7 +116,7 @@ func (u *ui) OnMount(ctx app.Context) {
 	if err := ctx.LocalStorage().Get(storageKey, &c); err != nil {
 		app.Log(err)
 	}
-	u.notes, u.deleted = c.Notes, c.Deleted
+	u.user, u.notes, u.deleted = c.User, c.Notes, c.Deleted
 	for _, id := range c.Dirty {
 		u.dirty[id] = 0
 	}
@@ -375,6 +379,7 @@ func (u *ui) Render() app.UI {
 // searching every space is open.
 func (u *ui) renderSpace(s *note.Space, searching bool) app.UI {
 	open := searching || !u.collapsed[s.Path]
+	shared := u.isShared(s.Path)
 	class := "space"
 	if !open {
 		class += " collapsed"
@@ -384,6 +389,9 @@ func (u *ui) renderSpace(s *note.Space, searching bool) app.UI {
 			app.Button().Class("space-name").Aria("expanded", open).Body(
 				app.Span().Class("chevron").Body(icon("expand_more")),
 				app.Span().Class("label").Text(s.Name),
+				app.If(shared, func() app.UI {
+					return app.Span().Class("shared").Title("Shared with other users").Body(icon("group"))
+				}),
 				app.Span().Class("count").Text(s.Count),
 			).OnClick(func(app.Context, app.Event) {
 				u.collapsed[s.Path] = !u.collapsed[s.Path]
@@ -391,9 +399,12 @@ func (u *ui) renderSpace(s *note.Space, searching bool) app.UI {
 			iconButton("add", "New note or subspace").OnClick(func(app.Context, app.Event) {
 				u.createNew(s.Path)
 			}, app.EventScope(s.Path)),
-			iconButton("edit", "Rename space").OnClick(func(app.Context, app.Event) {
-				u.renameSpace(s.Path)
-			}, app.EventScope(s.Path)),
+			// Renaming would move all notes out of the shared space, for everyone.
+			app.If(!shared, func() app.UI {
+				return iconButton("edit", "Rename space").OnClick(func(app.Context, app.Event) {
+					u.renameSpace(s.Path)
+				}, app.EventScope(s.Path))
+			}),
 			pinButton("Pin space", u.pinned[s.Path]).
 				OnClick(func(app.Context, app.Event) {
 					u.pinSpace(s.Path, !u.pinned[s.Path])
@@ -711,6 +722,13 @@ func (u *ui) signIn(ctx app.Context, e app.Event) {
 	}
 	user := strings.TrimSpace(app.Window().GetElementByID("login-user").Get("value").String())
 	password := app.Window().GetElementByID("login-password").Get("value").String()
+	// Changes another user left unsynced must not go to this user's notes.
+	if u.user != "" && user != u.user && (len(u.dirty) > 0 || len(u.deleted) > 0) && u.discard != user {
+		u.discard = user
+		u.loginErr = "Changes of " + u.user + " on this device are not synced yet. Sign in as " + u.user +
+			" to keep them, or again to discard them."
+		return
+	}
 	u.signingIn, u.loginErr = true, ""
 	ctx.Async(func() {
 		err := signIn(user, password)
@@ -723,6 +741,11 @@ func (u *ui) signIn(ctx app.Context, e app.Event) {
 				app.Log(err)
 				u.loginErr = "Can't reach the server. Try again."
 			default:
+				if u.user != "" && u.user != user { // another user's notes
+					u.notes, u.dirty, u.deleted = nil, map[string]int{}, nil
+					u.open("")
+				}
+				u.user, u.discard = user, ""
 				u.signedOut = false
 				ctx.LocalStorage().Del(signedOutKey)
 				app.Window().GetElementByID("login-password").Set("value", "")
@@ -1085,6 +1108,11 @@ func (u *ui) createNew(space string) {
 	}, value)
 }
 
+// isShared reports whether space path is one of the user's shared spaces.
+func (u *ui) isShared(space string) bool {
+	return slices.ContainsFunc(u.shared, func(s string) bool { return strings.EqualFold(s, space) })
+}
+
 // renameSpace moves space s with its subspaces and notes to another path.
 func (u *ui) renameSpace(s string) {
 	u.ask(prompt{
@@ -1210,7 +1238,8 @@ func (u *ui) persist() {
 	if err := u.ctx.LocalStorage().Get(storageKey, &stored); err != nil {
 		app.Log(err)
 	}
-	c := withPending(cache{Notes: u.notes, Dirty: slices.Collect(maps.Keys(u.dirty)), Deleted: u.deleted}, stored)
+	mine := cache{User: u.user, Notes: u.notes, Dirty: slices.Collect(maps.Keys(u.dirty)), Deleted: u.deleted}
+	c := withPending(mine, stored)
 	if err := u.ctx.LocalStorage().Set(storageKey, c); err != nil {
 		app.Log(err)
 		u.status = "Could not save on this device."
@@ -1222,7 +1251,17 @@ func (u *ui) persist() {
 // sync on the next start. This tab does not push them itself, as their tab
 // may still change them.
 func withPending(c, stored cache) cache {
+	if stored.User != c.User {
+		return c
+	}
 	c.Notes = slices.Clone(c.Notes)
+	for _, id := range stored.Deleted {
+		if slices.Contains(c.Deleted, id) || slices.Contains(c.Dirty, id) {
+			continue // changed here since
+		}
+		c.Deleted = append(slices.Clip(c.Deleted), id)
+		c.Notes = slices.DeleteFunc(c.Notes, func(n note.Note) bool { return n.ID == id })
+	}
 	for _, n := range stored.Notes {
 		if !slices.Contains(stored.Dirty, n.ID) || slices.Contains(c.Dirty, n.ID) || slices.Contains(c.Deleted, n.ID) {
 			continue
@@ -1262,6 +1301,11 @@ func (u *ui) sync(app.Context) {
 
 	u.ctx.Async(func() {
 		remote, rejected, err := exchange(push, deleted)
+		var self me
+		var selfErr error
+		if err == nil {
+			self, selfErr = whoAmI()
+		}
 		u.ctx.Dispatch(func(ctx app.Context) {
 			defer u.listen()      // opens once signed on, closes once signed out
 			if gen != u.syncGen { // signed out meanwhile
@@ -1285,6 +1329,12 @@ func (u *ui) sync(app.Context) {
 				return
 			}
 			u.status = ""
+			if selfErr == nil {
+				u.shared = self.Shared
+				if u.user == "" { // cached before user names were
+					u.user = self.User
+				}
+			}
 			for _, err := range rejected {
 				app.Log(err)
 				u.status = "Some notes could not be saved: " + err.Error()

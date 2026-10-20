@@ -77,7 +77,7 @@ func TestLoadUsers(t *testing.T) {
 	var logged bytes.Buffer
 	log.SetOutput(&logged)
 	defer log.SetOutput(os.Stderr)
-	users, err := loadUsers(path)
+	users, _, err := loadUsers(path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -95,13 +95,13 @@ func TestLoadUsers(t *testing.T) {
 	if err := os.WriteFile(path, []byte(`{"x":"plain"}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := loadUsers(path); err == nil {
+	if _, _, err := loadUsers(path); err == nil {
 		t.Error("accepted an invalid hash")
 	}
 	if err := os.WriteFile(path, []byte(`{"../x":"`+dummyHash+`"}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := loadUsers(path); err == nil {
+	if _, _, err := loadUsers(path); err == nil {
 		t.Error("accepted a user name that is no directory name")
 	}
 }

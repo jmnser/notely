@@ -50,3 +50,22 @@ func TestWithPending(t *testing.T) {
 		t.Error("withPending changed its argument")
 	}
 }
+
+func TestWithPendingDeleted(t *testing.T) {
+	stored := cache{User: "ann", Deleted: []string{"old", "edited"}}
+	mine := cache{
+		User:  "ann",
+		Notes: []note.Note{{ID: "old"}, {ID: "edited"}, {ID: "kept"}},
+		Dirty: []string{"edited"},
+	}
+	got := withPending(mine, stored)
+	if !slices.Equal(got.Deleted, []string{"old"}) || len(got.Notes) != 2 || got.Notes[0].ID != "edited" {
+		t.Errorf("got %+v", got)
+	}
+	if len(mine.Notes) != 3 {
+		t.Error("withPending changed its argument")
+	}
+	if got := withPending(mine, cache{User: "bob", Deleted: []string{"kept"}}); len(got.Notes) != 3 || len(got.Deleted) != 0 {
+		t.Errorf("merged another user's cache: %+v", got)
+	}
+}

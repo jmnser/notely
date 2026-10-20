@@ -21,35 +21,61 @@ const (
 
 var validID = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
 
-// newHandler serves the notes API on the store storeOf returns for a request:
+// newHandler serves the notes API on the view viewOf returns for a request:
 // the signed-on user's.
-func newHandler(storeOf func(*http.Request) *store, ev *events) http.Handler {
+func newHandler(viewOf func(*http.Request) *view, ev *events) http.Handler {
 	mux := http.NewServeMux()
-	handle := func(pattern string, h func(*store, http.ResponseWriter, *http.Request)) {
+	handle := func(pattern string, h func(*view, http.ResponseWriter, *http.Request)) {
 		mux.HandleFunc(pattern, func(w http.ResponseWriter, r *http.Request) {
-			s := storeOf(r)
-			if s == nil {
+			v := viewOf(r)
+			if v == nil {
 				http.Error(w, "signed out", http.StatusUnauthorized)
+				return
+			}
+			h(v, w, r)
+		})
+	}
+	// byNote serves requests for note {id} on the store holding it.
+	byNote := func(pattern string, h func(*store, http.ResponseWriter, *http.Request)) {
+		handle(pattern, func(v *view, w http.ResponseWriter, r *http.Request) {
+			s := v.find(r.PathValue("id"))
+			if s == nil {
+				http.Error(w, "no such note", http.StatusNotFound)
 				return
 			}
 			h(s, w, r)
 		})
 	}
+	// own serves requests on the user's own store.
+	own := func(pattern string, h func(*store, http.ResponseWriter, *http.Request)) {
+		handle(pattern, func(v *view, w http.ResponseWriter, r *http.Request) { h(v.own, w, r) })
+	}
 	mux.HandleFunc("GET /api/events", ev.serve)
-	handle("POST /api/notes/{id}/images", (*store).uploadImage)
-	handle("GET /api/notes/{id}/images", (*store).listImages)
-	handle("GET /api/notes/{id}/images/{name}", (*store).serveImage)
+	handle("POST /api/notes/{id}/images", func(v *view, w http.ResponseWriter, r *http.Request) {
+		if data, ok := readImage(w, r); ok {
+			name, err := v.putImage(r.PathValue("id"), data)
+			writeImage(w, r, name, err)
+		}
+	})
+	byNote("GET /api/notes/{id}/images", (*store).listImages)
+	byNote("GET /api/notes/{id}/images/{name}", (*store).serveImage)
 	// The former layout's image API, for /images/<name> references and apps
 	// still cached in browsers.
-	handle("POST /api/images", (*store).uploadImage)
-	handle("GET /api/images/{name}", (*store).serveImage)
+	own("POST /api/images", (*store).uploadImage)
+	own("GET /api/images/{name}", (*store).serveImage)
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	})
-	handle("GET /api/notes", func(s *store, w http.ResponseWriter, _ *http.Request) {
-		writeJSON(w, s.list())
+	handle("GET /api/me", func(v *view, w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, struct {
+			User   string   `json:"user"`
+			Shared []string `json:"shared"`
+		}{userOf(r), v.spaces()})
 	})
-	handle("PUT /api/notes/{id}", func(s *store, w http.ResponseWriter, r *http.Request) {
+	handle("GET /api/notes", func(v *view, w http.ResponseWriter, _ *http.Request) {
+		writeJSON(w, v.list())
+	})
+	handle("PUT /api/notes/{id}", func(v *view, w http.ResponseWriter, r *http.Request) {
 		var n note.Note
 		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxBody)).Decode(&n); err != nil {
 			http.Error(w, "invalid note", http.StatusBadRequest)
@@ -69,25 +95,26 @@ func newHandler(storeOf func(*http.Request) *store, ev *events) http.Handler {
 			http.Error(w, "control characters in title or space", http.StatusBadRequest)
 			return
 		}
-		n, err := s.put(n)
+		n, users, err := v.put(n)
 		if err != nil {
 			serverError(w, err)
 			return
 		}
-		ev.notify(userOf(r), r.Header.Get(clientHeader))
+		ev.notify(users, r.Header.Get(clientHeader))
 		writeJSON(w, n)
 	})
-	handle("DELETE /api/notes/{id}", func(s *store, w http.ResponseWriter, r *http.Request) {
+	handle("DELETE /api/notes/{id}", func(v *view, w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
 		if !validID.MatchString(id) {
 			http.Error(w, "invalid id", http.StatusBadRequest)
 			return
 		}
-		if err := s.delete(id); err != nil {
+		users, err := v.delete(id)
+		if err != nil {
 			serverError(w, err)
 			return
 		}
-		ev.notify(userOf(r), r.Header.Get(clientHeader))
+		ev.notify(users, r.Header.Get(clientHeader))
 		w.WriteHeader(http.StatusNoContent)
 	})
 	return mux
