@@ -75,7 +75,8 @@ func (s *store) putImage(id string, data []byte) (string, error) {
 	}
 	defer root.Close() //nolint:errcheck
 	rel := path.Join(filepath.ToSlash(dir), name)
-	if _, err := root.Stat(rel); err == nil {
+	// A file cut short, e.g. by a crash, is replaced.
+	if fi, err := root.Stat(rel); err == nil && fi.Size() == int64(len(data)) {
 		now := time.Now()
 		return name, root.Chtimes(rel, now, now)
 	}

@@ -76,6 +76,17 @@ func TestMigrateInterrupted(t *testing.T) {
 	}
 }
 
+func TestMigrateMarkerLost(t *testing.T) {
+	dir := t.TempDir()
+	writeNote(t, dir, "users/ann/Inbox.md", "x")
+	if err := migrate(dir, map[string]argonHash{"ann": {}}); err == nil {
+		t.Fatal("migrated the per-user layout")
+	}
+	if _, err := os.Stat(filepath.Join(dir, "users/ann/Inbox.md")); err != nil {
+		t.Error(err)
+	}
+}
+
 func TestLoadUsersUnique(t *testing.T) {
 	h := hashPassword("pw")
 	for name, data := range map[string]string{

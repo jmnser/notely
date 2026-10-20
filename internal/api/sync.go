@@ -3,7 +3,6 @@ package api
 import (
 	"bytes"
 	"context"
-	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -30,6 +29,8 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/transport"
 	"github.com/go-git/go-git/v5/plumbing/transport/client"
 	githttp "github.com/go-git/go-git/v5/plumbing/transport/http"
+
+	"github.com/jmnser/notely/internal/atomicfile"
 )
 
 // syncTimeout bounds one user's sync, so a remote that stops answering cannot
@@ -58,7 +59,7 @@ func (c syncSettings) validate() error {
 var installTransport sync.Once
 
 // backupTransport is an HTTPS transport that refuses loopback, link-local
-// (such as cloud metadata at 169.254.169.254) and multicast addresses, so a
+// (such as cloud metadata at 169.254.169.254), multicast and Tailscale addresses, so a
 // user cannot point the backup at the server's own services. It checks the
 // address dialed, after DNS resolution. Private LAN addresses stay allowed,
 // for self-hosted git servers.
@@ -68,6 +69,10 @@ func backupTransport() *http.Transport {
 	t.DialContext = d.DialContext
 	return t
 }
+
+// tailnet holds the address ranges Tailscale gives devices, which the server
+// may reach through its tailnet.
+var tailnet = []netip.Prefix{netip.MustParsePrefix("100.64.0.0/10"), netip.MustParsePrefix("fd7a:115c:a1e0::/48")}
 
 func refuseInternal(_, address string, _ syscall.RawConn) error {
 	host, _, err := net.SplitHostPort(address)
@@ -81,6 +86,11 @@ func refuseInternal(_, address string, _ syscall.RawConn) error {
 	if ip = ip.Unmap(); ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() ||
 		ip.IsInterfaceLocalMulticast() || ip.IsMulticast() || ip.IsUnspecified() {
 		return fmt.Errorf("git backup to %s refused: loopback and link-local addresses are not allowed", ip)
+	}
+	for _, p := range tailnet {
+		if p.Contains(ip) {
+			return fmt.Errorf("git backup to %s refused: Tailscale addresses are not allowed", ip)
+		}
 	}
 	return nil
 }
@@ -573,18 +583,8 @@ func host(remote string) string {
 	return strings.ToLower(u.Host)
 }
 
-// writeFile replaces name in root atomically, readable by the owner only. The
-// temporary file is a dot file with a random name, so concurrent writes of
-// the same name do not mix.
+// writeFile replaces name in root atomically and durably, readable by the
+// owner only.
 func writeFile(root *os.Root, name string, data []byte) error {
-	tmp := path.Join(path.Dir(name), "."+path.Base(name)+"."+rand.Text()+".tmp")
-	if err := root.WriteFile(tmp, data, 0o600); err != nil {
-		_ = root.Remove(tmp)
-		return err
-	}
-	if err := root.Rename(tmp, name); err != nil {
-		_ = root.Remove(tmp)
-		return err
-	}
-	return nil
+	return atomicfile.WriteFileIn(root, name, data)
 }

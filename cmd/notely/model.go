@@ -59,8 +59,8 @@ type (
 		err      error
 	}
 	loggedInMsg struct {
-		token string
-		err   error
+		user, token string
+		err         error
 	}
 	editedMsg struct {
 		note note.Note // as it was when the editor opened
@@ -116,8 +116,9 @@ type model struct {
 	answer      func(string) tea.Cmd // runs the prompt's input, or "y" on confirmation
 
 	syncing, again bool
-	autoTried      bool // signed in with the config since the last sign-out
-	seq            int  // change sequence, see state.Dirty
+	autoTried      bool   // signed in with the config since the last sign-out
+	discard        string // a user signing in again to discard another user's unsynced changes
+	seq            int    // change sequence, see state.Dirty
 	status         string
 }
 
@@ -202,7 +203,11 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.err != nil {
 			return m, m.loginFailed(msg.err)
 		}
-		m.autoTried = false // the next sign-out tries the config again
+		m.autoTried = false                                 // the next sign-out tries the config again
+		if m.state.User != "" && m.state.User != msg.user { // another user's notes
+			m.state.Notes, m.state.Dirty, m.state.Deleted, m.current = nil, map[string]int{}, nil, ""
+		}
+		m.state.User, m.discard = msg.user, ""
 		m.state.Session, m.status, m.screen = msg.token, "", listScreen
 		m.password.SetValue("")
 		m.password.Blur()
@@ -316,12 +321,19 @@ func (m *model) loginKey(msg tea.KeyPressMsg) tea.Cmd {
 }
 
 func (m *model) login(user, password string) tea.Cmd {
+	// Changes another user left unsynced must not go to this user's notes.
+	if old := m.state.User; old != "" && user != old && (len(m.state.Dirty) > 0 || len(m.state.Deleted) > 0) &&
+		m.discard != user {
+		m.discard = user
+		return m.loginFailed(fmt.Errorf(
+			"changes of %s are not synced yet: sign in as %s to keep them, or again to discard them", old, old))
+	}
 	m.status = "Signing in…"
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), timeout)
 		defer cancel()
 		token, err := m.client.login(ctx, user, password)
-		return loggedInMsg{token: token, err: err}
+		return loggedInMsg{user: user, token: token, err: err}
 	}
 }
 

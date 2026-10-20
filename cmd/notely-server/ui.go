@@ -27,6 +27,7 @@ const (
 
 // cache is the state kept in the browser's local storage.
 type cache struct {
+	User    string // signed on when the notes were cached
 	Notes   []note.Note
 	Dirty   []string
 	Deleted []string
@@ -82,6 +83,8 @@ type ui struct {
 	skipPop   int  // popstate events caused by syncBack itself
 	events    *eventSource
 	shared    []string // the user's shared spaces, top-level spaces other users see too
+	user      string   // the signed-on user, or the last one
+	discard   string   // a user signing in again to discard another user's unsynced changes
 }
 
 // eventSource is an open stream of the backend's change events.
@@ -113,7 +116,7 @@ func (u *ui) OnMount(ctx app.Context) {
 	if err := ctx.LocalStorage().Get(storageKey, &c); err != nil {
 		app.Log(err)
 	}
-	u.notes, u.deleted = c.Notes, c.Deleted
+	u.user, u.notes, u.deleted = c.User, c.Notes, c.Deleted
 	for _, id := range c.Dirty {
 		u.dirty[id] = 0
 	}
@@ -719,6 +722,13 @@ func (u *ui) signIn(ctx app.Context, e app.Event) {
 	}
 	user := strings.TrimSpace(app.Window().GetElementByID("login-user").Get("value").String())
 	password := app.Window().GetElementByID("login-password").Get("value").String()
+	// Changes another user left unsynced must not go to this user's notes.
+	if u.user != "" && user != u.user && (len(u.dirty) > 0 || len(u.deleted) > 0) && u.discard != user {
+		u.discard = user
+		u.loginErr = "Changes of " + u.user + " on this device are not synced yet. Sign in as " + u.user +
+			" to keep them, or again to discard them."
+		return
+	}
 	u.signingIn, u.loginErr = true, ""
 	ctx.Async(func() {
 		err := signIn(user, password)
@@ -731,6 +741,11 @@ func (u *ui) signIn(ctx app.Context, e app.Event) {
 				app.Log(err)
 				u.loginErr = "Can't reach the server. Try again."
 			default:
+				if u.user != "" && u.user != user { // another user's notes
+					u.notes, u.dirty, u.deleted = nil, map[string]int{}, nil
+					u.open("")
+				}
+				u.user, u.discard = user, ""
 				u.signedOut = false
 				ctx.LocalStorage().Del(signedOutKey)
 				app.Window().GetElementByID("login-password").Set("value", "")
@@ -1223,7 +1238,8 @@ func (u *ui) persist() {
 	if err := u.ctx.LocalStorage().Get(storageKey, &stored); err != nil {
 		app.Log(err)
 	}
-	c := withPending(cache{Notes: u.notes, Dirty: slices.Collect(maps.Keys(u.dirty)), Deleted: u.deleted}, stored)
+	mine := cache{User: u.user, Notes: u.notes, Dirty: slices.Collect(maps.Keys(u.dirty)), Deleted: u.deleted}
+	c := withPending(mine, stored)
 	if err := u.ctx.LocalStorage().Set(storageKey, c); err != nil {
 		app.Log(err)
 		u.status = "Could not save on this device."
@@ -1235,7 +1251,17 @@ func (u *ui) persist() {
 // sync on the next start. This tab does not push them itself, as their tab
 // may still change them.
 func withPending(c, stored cache) cache {
+	if stored.User != c.User {
+		return c
+	}
 	c.Notes = slices.Clone(c.Notes)
+	for _, id := range stored.Deleted {
+		if slices.Contains(c.Deleted, id) || slices.Contains(c.Dirty, id) {
+			continue // changed here since
+		}
+		c.Deleted = append(slices.Clip(c.Deleted), id)
+		c.Notes = slices.DeleteFunc(c.Notes, func(n note.Note) bool { return n.ID == id })
+	}
 	for _, n := range stored.Notes {
 		if !slices.Contains(stored.Dirty, n.ID) || slices.Contains(c.Dirty, n.ID) || slices.Contains(c.Deleted, n.ID) {
 			continue
@@ -1275,10 +1301,10 @@ func (u *ui) sync(app.Context) {
 
 	u.ctx.Async(func() {
 		remote, rejected, err := exchange(push, deleted)
-		var shared []string
-		var sharedErr error
+		var self me
+		var selfErr error
 		if err == nil {
-			shared, sharedErr = sharedSpaces()
+			self, selfErr = whoAmI()
 		}
 		u.ctx.Dispatch(func(ctx app.Context) {
 			defer u.listen()      // opens once signed on, closes once signed out
@@ -1303,8 +1329,11 @@ func (u *ui) sync(app.Context) {
 				return
 			}
 			u.status = ""
-			if sharedErr == nil {
-				u.shared = shared
+			if selfErr == nil {
+				u.shared = self.Shared
+				if u.user == "" { // cached before user names were
+					u.user = self.User
+				}
 			}
 			for _, err := range rejected {
 				app.Log(err)

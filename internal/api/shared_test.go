@@ -45,8 +45,8 @@ func TestSharedSpaces(t *testing.T) {
 			t.Errorf("private note shared in %s: bob sees %v", space, got)
 		}
 	}
-	if w := request(t, bob, http.MethodGet, "/api/spaces", ""); strings.TrimSpace(w.Body.String()) != `{"shared":["Family"]}` {
-		t.Errorf("spaces = %s", w.Body)
+	if w := request(t, bob, http.MethodGet, "/api/me", ""); strings.TrimSpace(w.Body.String()) != `{"user":"bob","shared":["Family"]}` {
+		t.Errorf("me = %s", w.Body)
 	}
 
 	img := request(t, bob, http.MethodPost, "/api/notes/plan/images", string(pngData(t)))

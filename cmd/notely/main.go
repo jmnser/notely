@@ -67,19 +67,20 @@ func run(server, user string, initialize, logout, force bool) error {
 		}
 		return nil
 	}
-	state, err := statePath(c.base)
+	stateFile, err := statePath(c.base)
 	if err != nil {
 		return err
 	}
-	s, err := loadState(state)
-	if err != nil {
-		return err
-	}
-	unlock, err := s.lock()
+	// Locked first, so the state read is not one a quitting instance replaces.
+	unlock, err := (&state{path: stateFile}).lock()
 	if err != nil {
 		return err
 	}
 	defer unlock()
+	s, err := loadState(stateFile)
+	if err != nil {
+		return err
+	}
 	if logout {
 		return signOut(c, s, force)
 	}

@@ -25,7 +25,9 @@ import (
 type state struct {
 	path string
 
-	Session string         `json:"session,omitempty"`
+	Session string `json:"session,omitempty"`
+	User    string `json:"user,omitempty"` // signed on with Session, or last
+
 	Notes   []note.Note    `json:"notes"`
 	Dirty   map[string]int `json:"dirty,omitempty"` // note ID → change sequence number
 	Deleted []string       `json:"deleted,omitempty"`

@@ -66,8 +66,11 @@ func newHandler(viewOf func(*http.Request) *view, ev *events) http.Handler {
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	})
-	handle("GET /api/spaces", func(v *view, w http.ResponseWriter, _ *http.Request) {
-		writeJSON(w, map[string][]string{"shared": v.spaces()})
+	handle("GET /api/me", func(v *view, w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, struct {
+			User   string   `json:"user"`
+			Shared []string `json:"shared"`
+		}{userOf(r), v.spaces()})
 	})
 	handle("GET /api/notes", func(v *view, w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, v.list())
