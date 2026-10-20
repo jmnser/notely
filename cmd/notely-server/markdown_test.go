@@ -117,11 +117,13 @@ func TestRenderMermaid(t *testing.T) {
 }
 
 func TestRenderImages(t *testing.T) {
-	got := render("![cat](/images/0123456789abcdef0123456789abcdef.png)\n\n![web](https://example.com/a.png)\n\n"+
-		"[full](/images/0123456789abcdef0123456789abcdef.png)", "/notely")
+	const img = "0123456789abcdef0123456789abcdef.png"
+	got := render("![cat]("+img+")\n\n![old](/images/"+img+")\n\n![web](https://example.com/a.png)\n\n"+
+		"[full]("+img+")", "/notely/api/notes/a/images/")
 	for _, want := range []string{
-		`<a href="/notely/api/images/0123456789abcdef0123456789abcdef.png">full</a>`,
-		`<img loading="lazy" src="/notely/api/images/0123456789abcdef0123456789abcdef.png" alt="cat">`,
+		`<a href="/notely/api/notes/a/images/` + img + `">full</a>`,
+		`<img loading="lazy" title="` + img + `" src="/notely/api/notes/a/images/` + img + `" alt="cat">`,
+		`<img loading="lazy" title="` + img + `" src="/notely/api/notes/a/images/` + img + `" alt="old">`,
 		`<img src="https://example.com/a.png" alt="web">`,
 	} {
 		if !strings.Contains(got, want) {
@@ -132,10 +134,11 @@ func TestRenderImages(t *testing.T) {
 
 func TestImageMarkdown(t *testing.T) {
 	for file, want := range map[string]string{
-		"cat.png":      "![cat](/images/x.png)\n",
-		"a [b]\\c.jpg": "![a bc](/images/x.png)\n",
+		"cat.png":      "![cat](x.png)\n",
+		"a [b]\\c.jpg": "![a bc](x.png)\n",
+		"":             "![](x.png)\n",
 	} {
-		if got := imageMarkdown(file, "/images/x.png"); got != want {
+		if got := imageMarkdown(file, "x.png"); got != want {
 			t.Errorf("imageMarkdown(%q) = %q, want %q", file, got, want)
 		}
 	}

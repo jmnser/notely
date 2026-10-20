@@ -57,20 +57,22 @@ func remoteFiles(t *testing.T, dir string) ([]string, int) {
 
 func TestSync(t *testing.T) {
 	tmp := t.TempDir()
-	notes, remote := filepath.Join(tmp, "notes"), filepath.Join(tmp, "remote.git")
+	users, remote := filepath.Join(tmp, "users"), filepath.Join(tmp, "remote.git")
+	notes := filepath.Join(users, "ann")
 	if _, err := git.PlainInit(remote, true); err != nil {
 		t.Fatal(err)
 	}
 	writeNote(t, notes, "Inbox.md", "a")
 	writeNote(t, notes, "work/Plan.md", "b")
 	writeNote(t, notes, ".users.json", "secret")
-	writeNote(t, notes, ".images/0123456789abcdef0123456789abcdef.png", "png")
-	writeNote(t, notes, ".images/.0123456789abcdef0123456789abcdef.png.ABC.tmp", "partial")
-	writeNote(t, notes, ".images/sub/x.md", "nested")
+	writeNote(t, notes, "work/0123456789abcdef0123456789abcdef.png", "png")
+	writeNote(t, notes, "work/.0123456789abcdef0123456789abcdef.png.ABC.tmp", "partial")
+	writeNote(t, notes, "work/notes.txt", "other")
+	writeNote(t, filepath.Join(users, "bob"), "Bob.md", "bob's")
 	if err := os.Symlink("/etc/hosts", filepath.Join(notes, "leak.md")); err != nil {
 		t.Fatal(err)
 	}
-	s := newSyncer(notes, map[string]bool{"ann": true})
+	s := newSyncer(users, map[string]bool{"ann": true, "bob": true})
 	// save skips validate, so a local path works as remote.
 	if err := s.save("ann", syncSettings{Remote: remote, Branch: "main"}, "tok"); err != nil {
 		t.Fatal(err)
@@ -89,7 +91,7 @@ func TestSync(t *testing.T) {
 	if st := sync(); st.Commit == "" {
 		t.Error("first sync pushed nothing")
 	}
-	if files, n := remoteFiles(t, remote); !slices.Equal(files, []string{"Inbox.md", "images/0123456789abcdef0123456789abcdef.png", "work/Plan.md"}) || n != 1 {
+	if files, n := remoteFiles(t, remote); !slices.Equal(files, []string{"Inbox.md", "work/0123456789abcdef0123456789abcdef.png", "work/Plan.md"}) || n != 1 {
 		t.Errorf("remote = %v, %d commits", files, n)
 	}
 	if st := sync(); st.Commit != "" {
@@ -101,7 +103,7 @@ func TestSync(t *testing.T) {
 		t.Fatal(err)
 	}
 	sync()
-	if files, n := remoteFiles(t, remote); !slices.Equal(files, []string{"images/0123456789abcdef0123456789abcdef.png", "work/Plan.md"}) || n != 2 {
+	if files, n := remoteFiles(t, remote); !slices.Equal(files, []string{"work/0123456789abcdef0123456789abcdef.png", "work/Plan.md"}) || n != 2 {
 		t.Errorf("after edit: remote = %v, %d commits", files, n)
 	}
 
@@ -121,14 +123,15 @@ func TestSync(t *testing.T) {
 		t.Fatal(err)
 	}
 	sync()
-	if files, n := remoteFiles(t, remote); !slices.Equal(files, []string{"images/0123456789abcdef0123456789abcdef.png", "work/Plan.md"}) || n != 4 {
+	if files, n := remoteFiles(t, remote); !slices.Equal(files, []string{"work/0123456789abcdef0123456789abcdef.png", "work/Plan.md"}) || n != 4 {
 		t.Errorf("after remote commit: remote = %v, %d commits", files, n)
 	}
 }
 
 func TestSyncHandler(t *testing.T) {
-	notes := t.TempDir()
-	s := newSyncer(notes, map[string]bool{"ann": true})
+	users := t.TempDir()
+	writeNote(t, filepath.Join(users, "ann"), "Inbox.md", "a")
+	s := newSyncer(users, map[string]bool{"ann": true})
 	h := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		r = r.WithContext(context.WithValue(r.Context(), userKey{}, "ann"))
 		s.handler().ServeHTTP(w, r)
@@ -155,7 +158,7 @@ func TestSyncHandler(t *testing.T) {
 	if code, _ := do("PUT", `{"remote":"https://github.com/a/b.git","branch":"main","token":" ghp_secret\n"}`); code != http.StatusNoContent {
 		t.Fatalf("PUT = %d", code)
 	}
-	token := filepath.Join(notes, ".sync", "ann", "token")
+	token := filepath.Join(users, "ann", ".sync", "token")
 	if data, err := os.ReadFile(token); err != nil || string(data) != "ghp_secret" {
 		t.Errorf("token file = %q, %v", data, err)
 	}
@@ -180,21 +183,24 @@ func TestSyncHandler(t *testing.T) {
 	if code, _ := do("DELETE", ""); code != http.StatusNoContent {
 		t.Errorf("DELETE = %d", code)
 	}
-	if _, err := os.Stat(filepath.Join(notes, ".sync", "ann")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(users, "ann", ".sync")); !os.IsNotExist(err) {
 		t.Error("DELETE left files")
+	}
+	if _, err := os.Stat(filepath.Join(users, "ann", "Inbox.md")); err != nil {
+		t.Errorf("DELETE removed notes: %v", err)
 	}
 }
 
 func TestSyncRemoteChangeAndRemovedUser(t *testing.T) {
 	tmp := t.TempDir()
-	notes, a, b := filepath.Join(tmp, "notes"), filepath.Join(tmp, "a.git"), filepath.Join(tmp, "b.git")
+	notes, a, b := filepath.Join(tmp, "users", "ann"), filepath.Join(tmp, "a.git"), filepath.Join(tmp, "b.git")
 	for _, r := range []string{a, b} {
 		if _, err := git.PlainInit(r, true); err != nil {
 			t.Fatal(err)
 		}
 	}
 	writeNote(t, notes, "Inbox.md", "a")
-	s := newSyncer(notes, map[string]bool{"ann": true})
+	s := newSyncer(filepath.Dir(notes), map[string]bool{"ann": true})
 	ctx := context.Background()
 	for i, remote := range []string{a, a, b} {
 		if i == 1 {

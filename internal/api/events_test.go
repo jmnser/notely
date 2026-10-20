@@ -53,7 +53,7 @@ func TestEvents(t *testing.T) {
 		t.Fatal(err)
 	}
 	ev := newEvents()
-	h := newHandler(s, ev)
+	h := newHandler(only(s), ev)
 	var signedOn atomic.Bool
 	signedOn.Store(true)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

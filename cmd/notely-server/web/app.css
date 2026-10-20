@@ -747,6 +747,36 @@ dialog p {
   font-size: 12px;
   font-weight: 500;
 }
+.gallery {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+  gap: 8px;
+  max-height: 60vh;
+  overflow-y: auto;
+}
+.gallery-item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 4px;
+  border: 1px solid var(--md-outline-variant);
+  border-radius: 12px;
+  background: none;
+  color: inherit;
+  cursor: pointer;
+}
+.gallery-item img {
+  width: 100%;
+  aspect-ratio: 1;
+  object-fit: cover;
+  border-radius: 8px;
+}
+.gallery-item code {
+  font-family: var(--md-mono);
+  font-size: 10px;
+  overflow-wrap: anywhere;
+  user-select: all;
+}
 .backup-status {
   margin: 16px 0 0;
   overflow-wrap: anywhere;

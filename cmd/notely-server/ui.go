@@ -62,14 +62,16 @@ type ui struct {
 	dialog    prompt
 	html      string // rendered htmlSrc
 	mermaid   int    // Mermaid loading state: 0 not loaded, 1 loading, 2 ready
-	htmlSrc   string
+	htmlSrc   string // note ID and source of html
 	query     string
 	status    string
 	signedOut bool   // the backend asks for a sign-on
 	signingIn bool   // a sign-on request is running
 	loginErr  string // why the last sign-on failed
 	backup    syncInfo
-	backupMsg string // git backup status shown in its dialog
+	backupMsg string   // git backup status shown in its dialog
+	images    []string // names of the images next to the open note, in their dialog
+	imagesMsg string   // images dialog status
 	syncing   bool
 	again     bool // a sync was requested while one was running
 	retries   bool // a retry of a failed sync is scheduled
@@ -287,6 +289,7 @@ func (u *ui) Render() app.UI {
 					iconButton("image", "Insert image").Hidden(!u.editing).OnClick(func(app.Context, app.Event) {
 						app.Window().GetElementByID("image-file").Call("click")
 					}),
+					iconButton("photo_library", "Images in this space").Hidden(!u.editing).OnClick(u.openImages),
 					iconButton("move", "Move to space").OnClick(u.move),
 					pinButton("Pin", cur != nil && cur.Pinned).
 						OnClick(func(app.Context, app.Event) { u.togglePin(u.current) }),
@@ -347,6 +350,7 @@ func (u *ui) Render() app.UI {
 			),
 		),
 		u.renderBackup(),
+		u.renderImages(),
 		app.Dialog().ID("dialog").Body(
 			app.Form().OnSubmit(u.submit).Body(
 				app.H2().Text(u.dialog.title),
@@ -757,10 +761,11 @@ func (u *ui) signOut(app.Context, app.Event) {
 	}, "")
 }
 
-// rendered returns src as HTML, rendering it only when it changed.
+// rendered returns src of the open note as HTML, rendering it only when it
+// or the note changed.
 func (u *ui) rendered(src string) string {
-	if u.html == "" || src != u.htmlSrc {
-		u.html, u.htmlSrc = render(src, rootPrefix()), src
+	if key := u.current + "\n" + src; u.html == "" || key != u.htmlSrc {
+		u.html, u.htmlSrc = render(src, imageBase(u.current)), key
 	}
 	return u.html
 }
@@ -902,17 +907,21 @@ func (u *ui) insertImages(files app.Value) {
 	if len(list) == 0 {
 		return
 	}
-	id := u.current
+	cur := u.find(u.current)
+	if cur == nil {
+		return
+	}
+	id, n := cur.ID, *cur
 	u.status = "Uploading image…"
 	u.ctx.Async(func() {
 		var text strings.Builder
 		var err error
 		for _, f := range list {
-			var p string
-			if p, err = uploadImage(f); err != nil {
+			var name string
+			if name, err = uploadImage(n, f); err != nil {
 				break
 			}
-			text.WriteString(imageMarkdown(f.Get("name").String(), p))
+			text.WriteString(imageMarkdown(f.Get("name").String(), name))
 		}
 		u.ctx.Dispatch(func(app.Context) {
 			switch {
@@ -929,6 +938,60 @@ func (u *ui) insertImages(files app.Value) {
 			}
 		})
 	})
+}
+
+// openImages shows the images next to the open note, to insert one again.
+func (u *ui) openImages(app.Context, app.Event) {
+	id := u.current
+	u.images, u.imagesMsg = nil, "Loading…"
+	app.Window().GetElementByID("images").Call("showModal")
+	u.ctx.Async(func() {
+		names, err := listImages(id)
+		u.ctx.Dispatch(func(app.Context) {
+			if id != u.current {
+				return
+			}
+			switch {
+			case err != nil:
+				app.Log(err)
+				u.imagesMsg = "Can't load the images: " + err.Error()
+			case len(names) == 0:
+				u.imagesMsg = "No images in this space yet."
+			default:
+				u.images, u.imagesMsg = names, ""
+			}
+		})
+	})
+}
+
+// renderImages renders the dialog listing the images next to the open note.
+func (u *ui) renderImages() app.UI {
+	base := imageBase(u.current)
+	return app.Dialog().ID("images").Body(
+		app.H2().Text("Images in this space"),
+		app.P().Text("Images are named after their content. Select one to insert it.").Hidden(len(u.images) == 0),
+		app.P().Attr("role", "status").Text(u.imagesMsg).Hidden(u.imagesMsg == ""),
+		app.Div().Class("gallery").Body(app.Range(u.images).Slice(func(i int) app.UI {
+			name := u.images[i]
+			return app.Button().Type("button").Class("gallery-item").Title("Insert "+name).
+				OnClick(func(app.Context, app.Event) {
+					app.Window().GetElementByID("images").Call("close")
+					if u.editing {
+						u.insertText(imageMarkdown("", name))
+					}
+				}).
+				Body(
+					app.Img().Src(base+name).Alt("").Attr("loading", "lazy"),
+					app.Code().Text(name),
+				)
+		})),
+		app.Div().Class("actions").Body(
+			app.Span().Class("spacer"),
+			app.Button().Type("button").Class("text-button").Text("Close").OnClick(func(app.Context, app.Event) {
+				app.Window().GetElementByID("images").Call("close")
+			}),
+		),
+	)
 }
 
 // imageMarkdown is a Markdown image of src, described by the file name.

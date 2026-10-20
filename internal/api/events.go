@@ -31,12 +31,12 @@ func newEvents() *events {
 	return &events{listeners: map[chan struct{}]listener{}, done: make(chan struct{})}
 }
 
-// notify tells all listeners but client, which made the change.
-func (e *events) notify(client string) {
+// notify tells user's listeners but client, which made the change.
+func (e *events) notify(user, client string) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	for c, l := range e.listeners {
-		if client == "" || l.client != client {
+		if l.user == user && (client == "" || l.client != client) {
 			select {
 			case c <- struct{}{}:
 			default: // a change is already pending

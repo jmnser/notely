@@ -16,7 +16,11 @@ import (
 	"github.com/jmnser/notely/internal/note"
 )
 
-// store keeps notes in memory and persists each one as <dir>/<space>/<title>.md.
+// noteExt is the extension of note files.
+const noteExt = ".md"
+
+// store keeps a user's notes in memory and persists each one as
+// <dir>/<space>/<title>.md, with the images they use next to them.
 type store struct {
 	mu    sync.Mutex
 	dir   string
@@ -39,7 +43,7 @@ func openStore(dir string) (*store, error) {
 				return filepath.SkipDir
 			}
 			return nil
-		case d.IsDir() || filepath.Ext(path) != ".md":
+		case d.IsDir() || filepath.Ext(path) != noteExt:
 			return nil
 		}
 		rel, err := filepath.Rel(dir, path)
@@ -104,6 +108,7 @@ func (s *store) put(n note.Note) (note.Note, error) {
 		return note.Note{}, err
 	}
 	if exists && old != rel && !s.sameFile(old, rel) {
+		s.copyImages(n.Body, filepath.Dir(old), filepath.Dir(rel))
 		if err := s.remove(old); err != nil {
 			log.Print(err)
 		}

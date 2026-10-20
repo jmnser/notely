@@ -91,13 +91,13 @@ type syncStatus struct {
 	Error  string    `json:"error,omitempty"`
 }
 
-// syncer pushes the notes to each user's git repository: one-way, the app's
-// notes replace the branch content in a new commit. Per user it keeps
-// <dir>/<user>/settings.json, token (mode 0600) and repo, a clone the notes
-// are mirrored into; only the notes' .md files are committed.
+// syncer pushes each user's notes to their git repository: one-way, the
+// app's notes replace the branch content in a new commit. The notes are in
+// <dir>/<user>; next to them, in .sync, it keeps settings.json, token (mode
+// 0600) and repo, a clone the notes are mirrored into; only the notes' .md
+// files and images are committed.
 type syncer struct {
-	notes string          // notes directory
-	dir   string          // per-user sync state
+	dir   string          // per-user directories
 	users map[string]bool // users allowed to sync; state of removed users is kept but idle
 	runs  chan string
 	work  sync.Mutex // one sync at a time
@@ -107,14 +107,16 @@ type syncer struct {
 	queued map[string]bool // users in runs
 }
 
-func newSyncer(notes string, users map[string]bool) *syncer {
+// syncDir is the git backup state in a user's directory; dot files are not notes.
+const syncDir = ".sync"
+
+func newSyncer(dir string, users map[string]bool) *syncer {
 	installTransport.Do(func() {
 		client.InstallProtocol("https", githttp.NewClient(&http.Client{Transport: backupTransport()}))
 	})
 	return &syncer{
-		notes:  notes,
 		users:  users,
-		dir:    filepath.Join(notes, ".sync"), // dot files are not notes
+		dir:    dir,
 		runs:   make(chan string, 16),
 		status: map[string]syncStatus{},
 		queued: map[string]bool{},
@@ -198,7 +200,7 @@ var errNotConfigured = errors.New("git backup not configured")
 
 const origin = "origin"
 
-// root opens the sync directory, creating it. Per-user files are only
+// root opens the per-user directories, creating them. Sync state is only
 // accessed through it, so no path can leave it.
 func (s *syncer) root() (*os.Root, error) {
 	if err := os.MkdirAll(s.dir, 0o700); err != nil {
@@ -213,14 +215,14 @@ func (s *syncer) settings(user string) (c syncSettings, hasToken bool, err error
 		return c, false, err
 	}
 	defer root.Close() //nolint:errcheck
-	data, err := root.ReadFile(path.Join(user, "settings.json"))
+	data, err := root.ReadFile(path.Join(user, syncDir, "settings.json"))
 	if errors.Is(err, fs.ErrNotExist) {
 		return c, false, errNotConfigured
 	}
 	if err == nil {
 		err = json.Unmarshal(data, &c)
 	}
-	_, terr := root.Stat(path.Join(user, "token"))
+	_, terr := root.Stat(path.Join(user, syncDir, "token"))
 	return c, terr == nil, err
 }
 
@@ -230,7 +232,7 @@ func (s *syncer) token(user string) (string, error) {
 		return "", err
 	}
 	defer root.Close() //nolint:errcheck
-	data, err := root.ReadFile(path.Join(user, "token"))
+	data, err := root.ReadFile(path.Join(user, syncDir, "token"))
 	return strings.TrimSpace(string(data)), err
 }
 
@@ -249,11 +251,11 @@ func (s *syncer) save(user string, c syncSettings, token string) error {
 	}
 	defer root.Close() //nolint:errcheck
 	if old.Remote != c.Remote {
-		if err := root.RemoveAll(path.Join(user, "repo")); err != nil {
+		if err := root.RemoveAll(path.Join(user, syncDir, "repo")); err != nil {
 			return err
 		}
 	}
-	if err := root.MkdirAll(user, 0o700); err != nil {
+	if err := root.MkdirAll(path.Join(user, syncDir), 0o700); err != nil {
 		return err
 	}
 	data, err := json.Marshal(c)
@@ -261,11 +263,11 @@ func (s *syncer) save(user string, c syncSettings, token string) error {
 		return err
 	}
 	if token != "" {
-		if err := writeFile(root, path.Join(user, "token"), []byte(token)); err != nil {
+		if err := writeFile(root, path.Join(user, syncDir, "token"), []byte(token)); err != nil {
 			return err
 		}
 	}
-	return writeFile(root, path.Join(user, "settings.json"), data)
+	return writeFile(root, path.Join(user, syncDir, "settings.json"), data)
 }
 
 // remove deletes a user's settings, token and clone.
@@ -280,7 +282,7 @@ func (s *syncer) remove(user string) error {
 		return err
 	}
 	defer root.Close() //nolint:errcheck
-	return root.RemoveAll(user)
+	return root.RemoveAll(path.Join(user, syncDir))
 }
 
 // push mirrors the notes onto the user's branch and pushes a commit if they
@@ -301,7 +303,7 @@ func (s *syncer) push(ctx context.Context, user string) (string, error) {
 	branch := plumbing.NewBranchReferenceName(c.Branch)
 	tracking := plumbing.NewRemoteReferenceName(origin, c.Branch)
 
-	repo, err := openRepo(filepath.Join(s.dir, user, "repo"), c.Remote)
+	repo, err := openRepo(filepath.Join(s.dir, user, syncDir, "repo"), c.Remote)
 	if err != nil {
 		return "", err
 	}
@@ -338,7 +340,7 @@ func (s *syncer) push(ctx context.Context, user string) (string, error) {
 			return "", fmt.Errorf("reset: %w", err)
 		}
 	}
-	if err := mirror(s.notes, wt.Filesystem.Root()); err != nil {
+	if err := mirror(filepath.Join(s.dir, user), wt.Filesystem.Root()); err != nil {
 		return "", fmt.Errorf("copy notes: %w", err)
 	}
 	if err := wt.AddWithOptions(&git.AddOptions{All: true}); err != nil {
@@ -390,10 +392,10 @@ func openRepo(dir, remote string) (*git.Repository, error) {
 	return repo, repo.SetConfig(cfg)
 }
 
-// copyFile copies rel of from to out of to, unless out holds it already.
-func copyFile(from, to *os.Root, rel, out string) error {
-	if out != rel {
-		if _, err := to.Stat(out); err == nil {
+// copyFile copies rel of from to to, unless to holds it already.
+func copyFile(from, to *os.Root, rel string) error {
+	if imageName.MatchString(path.Base(rel)) {
+		if _, err := to.Stat(rel); err == nil {
 			return nil // an image's name is its content
 		}
 	}
@@ -401,18 +403,17 @@ func copyFile(from, to *os.Root, rel, out string) error {
 	if err != nil {
 		return err
 	}
-	if old, err := to.ReadFile(out); err == nil && bytes.Equal(old, data) {
+	if old, err := to.ReadFile(rel); err == nil && bytes.Equal(old, data) {
 		return nil
 	}
-	if err := to.MkdirAll(path.Dir(out), 0o700); err != nil {
+	if err := to.MkdirAll(path.Dir(rel), 0o700); err != nil {
 		return err
 	}
-	return to.WriteFile(out, data, 0o600)
+	return to.WriteFile(rel, data, 0o600)
 }
 
-// mirror makes dst hold exactly the .md files of src and its images, which
-// .images/ holds and images/ gets. Other dot entries and symbolic links are
-// skipped; os.Root keeps all access inside both trees.
+// mirror makes dst hold exactly the .md files and images of src. Dot entries
+// and symbolic links are skipped; os.Root keeps all access inside both trees.
 func mirror(src, dst string) error {
 	from, err := os.OpenRoot(src)
 	if err != nil {
@@ -427,16 +428,11 @@ func mirror(src, dst string) error {
 
 	files := map[string]bool{}
 	err = fs.WalkDir(from.FS(), ".", func(rel string, d fs.DirEntry, err error) error {
-		out := rel
 		switch {
 		case errors.Is(err, fs.ErrNotExist): // moved by an edit meanwhile; the next sync has it
 			return nil
 		case err != nil:
 			return err
-		case rel == imageDir && d.IsDir():
-			return nil
-		case d.IsDir() && path.Dir(rel) == imageDir:
-			return fs.SkipDir
 		case rel != "." && strings.HasPrefix(d.Name(), "."):
 			if d.IsDir() {
 				return fs.SkipDir
@@ -444,17 +440,12 @@ func mirror(src, dst string) error {
 			return nil
 		case !d.Type().IsRegular():
 			return nil
-		case path.Dir(rel) == imageDir:
-			if !imageName.MatchString(d.Name()) {
-				return nil
-			}
-			out = path.Join("images", d.Name())
-		case path.Ext(rel) != ".md":
+		case path.Ext(rel) != noteExt && !imageName.MatchString(d.Name()):
 			return nil
 		}
-		files[out] = true
-		if err := copyFile(from, to, rel, out); errors.Is(err, fs.ErrNotExist) {
-			delete(files, out) // moved by an edit meanwhile; the next sync has it
+		files[rel] = true
+		if err := copyFile(from, to, rel); errors.Is(err, fs.ErrNotExist) {
+			delete(files, rel) // moved by an edit meanwhile; the next sync has it
 		} else if err != nil {
 			return err
 		}

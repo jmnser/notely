@@ -91,7 +91,7 @@ tailscale funnel --bg --set-path=/notely http://127.0.0.1:8000/notely
 
 ## Sign-on
 
-On first start `notely-server` creates `<data>/.users.json` with the user `joe` and a random password, which it logs once (`journalctl --user -u notely` or `docker logs notely`). Change it, and add users, there, then restart, with hashes from:
+On first start `notely-server` creates `<data>/.users.json` with the user `joe` and a random password, which it logs once (`journalctl --user -u notely` or `docker logs notely`). Change it, and add users, there, then restart, with hashes from the command below. Each user's notes, images and backup state live in `<data>/users/<user>/`; notes from before v0.13.0 move there on start.
 
 ```sh
 echo -n 'new password' | notely-server -hash
@@ -101,7 +101,7 @@ Serve over HTTPS beyond localhost; see [design.md](design.md#sign-on).
 
 ## Images
 
-In edit mode, the image button or pasting an image uploads it and inserts `![name](/images/<hash>.png)`. Images (PNG, JPEG, GIF, WebP, up to 2 MiB) live in `<data>/.images/` and are part of the git backup under `images/`.
+In edit mode, the image button or pasting an image uploads it and inserts `![name](<hash>.png)`. Images (PNG, JPEG, GIF, WebP, up to 2 MiB) live next to the note's Markdown file in its space, `<data>/users/<user>/<space>/`, also in the git backup. The gallery button lists a space's images with their names to insert them again. Unreferenced images are deleted every Sunday at 23:00 server time once a week old.
 
 ## Git backup
 

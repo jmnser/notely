@@ -23,6 +23,11 @@ func request(t *testing.T, h http.Handler, method, path, body string, header ...
 	return w
 }
 
+// only returns a storeOf for newHandler that always returns s.
+func only(s *store) func(*http.Request) *store {
+	return func(*http.Request) *store { return s }
+}
+
 func list(t *testing.T, h http.Handler) []note.Note {
 	t.Helper()
 	w := request(t, h, http.MethodGet, "/api/notes", "")
@@ -39,7 +44,7 @@ func TestAPI(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	h := newHandler(s, newEvents())
+	h := newHandler(only(s), newEvents())
 
 	if got := list(t, h); len(got) != 0 {
 		t.Fatalf("new store has notes: %v", got)
@@ -66,7 +71,7 @@ func TestAPI(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := list(t, newHandler(s, newEvents())); len(got) != 1 || got[0].Body != "text" {
+	if got := list(t, newHandler(only(s), newEvents())); len(got) != 1 || got[0].Body != "text" {
 		t.Fatalf("after reopen = %+v", got)
 	}
 }
@@ -76,7 +81,7 @@ func TestAPIRejects(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	h := newHandler(s, newEvents())
+	h := newHandler(only(s), newEvents())
 
 	tests := []struct {
 		name, path, body string
