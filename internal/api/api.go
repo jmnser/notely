@@ -39,6 +39,10 @@ func newHandler(storeOf func(*http.Request) *store, ev *events) http.Handler {
 	handle("POST /api/notes/{id}/images", (*store).uploadImage)
 	handle("GET /api/notes/{id}/images", (*store).listImages)
 	handle("GET /api/notes/{id}/images/{name}", (*store).serveImage)
+	// The former layout's image API, for /images/<name> references and apps
+	// still cached in browsers.
+	handle("POST /api/images", (*store).uploadImage)
+	handle("GET /api/images/{name}", (*store).serveImage)
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	})

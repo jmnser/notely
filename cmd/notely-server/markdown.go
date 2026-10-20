@@ -19,7 +19,7 @@ var md = goldmark.New(goldmark.WithExtensions(extension.GFM))
 
 // imageLink finds links to a note's images: by name, relative to the note, or
 // as /images/<name>, as notes referenced them before images moved next to them.
-var imageLink = regexp.MustCompile(`<(img src|a href)="(?:/images/)?([0-9a-f]{32}\.(?:png|jpg|gif|webp))"`)
+var imageLink = regexp.MustCompile(`<(img src|a href)="(/images/)?([0-9a-f]{32}\.(?:png|jpg|gif|webp))"`)
 
 const (
 	checkbox     = ` disabled="" type="checkbox"`
@@ -30,8 +30,8 @@ const (
 // render converts markdown to HTML with a single root element. Task list
 // checkboxes are enabled and numbered in data-task, in document order.
 // Mermaid code blocks become <pre class="mermaid"> for Mermaid to draw.
-// The note's images load from images, the URL path they are served under.
-func render(src, images string) string {
+// Images of note id load from the API under prefix.
+func render(src, prefix, id string) string {
 	var buf bytes.Buffer
 	if err := md.Convert([]byte(src), &buf); err != nil {
 		return "<div></div>"
@@ -40,10 +40,14 @@ func render(src, images string) string {
 	out.WriteString(`<div class="markdown">`)
 	html := imageLink.ReplaceAllStringFunc(buf.String(), func(link string) string {
 		m := imageLink.FindStringSubmatch(link)
-		if m[1] == "img src" {
-			return `<img loading="lazy" title="` + m[2] + `" src="` + images + m[2] + `"`
+		url := imageBase(prefix, id) + m[3]
+		if m[2] != "" {
+			url = prefix + "/api/images/" + m[3] // found in any of the user's directories
 		}
-		return `<a href="` + images + m[2] + `"`
+		if m[1] == "img src" {
+			return `<img loading="lazy" title="` + m[3] + `" src="` + url + `"`
+		}
+		return `<a href="` + url + `"`
 	})
 	rest := mermaidBlocks(html)
 	for i := 0; ; i++ {
@@ -226,6 +230,12 @@ func itemEnd(src string, li ast.Node, start, col int) int {
 // markers of s.
 func indentOf(s string) int {
 	return len(s) - len(strings.TrimLeft(s, " \t>"))
+}
+
+// imageBase is the URL path the images next to note id are served under,
+// below prefix.
+func imageBase(prefix, id string) string {
+	return prefix + "/api/notes/" + id + "/images/"
 }
 
 // mermaidBlocks marks fenced mermaid code blocks in html for Mermaid. Their

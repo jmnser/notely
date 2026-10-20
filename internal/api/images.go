@@ -50,8 +50,8 @@ func (s *store) noteDir(id string) (string, bool) {
 	return filepath.Dir(rel), ok
 }
 
-// putImage stores data next to note id and returns its name. Storing an
-// image again restarts its grace period.
+// putImage stores data next to note id, or in the top directory for no id,
+// and returns its name. Storing an image again restarts its grace period.
 func (s *store) putImage(id string, data []byte) (string, error) {
 	ext, ok := imageTypes[http.DetectContentType(data)]
 	if !ok {
@@ -62,9 +62,12 @@ func (s *store) putImage(id string, data []byte) (string, error) {
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	dir, ok := s.noteDir(id)
-	if !ok {
-		return "", fs.ErrNotExist
+	dir := "."
+	if id != "" {
+		var ok bool
+		if dir, ok = s.noteDir(id); !ok {
+			return "", fs.ErrNotExist
+		}
 	}
 	root, err := os.OpenRoot(s.dir)
 	if err != nil {
@@ -98,6 +101,41 @@ func (s *store) openImage(id, name string) (*os.File, error) {
 	}
 	defer root.Close() //nolint:errcheck
 	return root.Open(path.Join(filepath.ToSlash(dir), name))
+}
+
+// findImage opens the first image called name in the user's directories,
+// for references of the former layout, /images/<name>.
+func (s *store) findImage(name string) (*os.File, error) {
+	if !imageName.MatchString(name) {
+		return nil, fs.ErrNotExist
+	}
+	root, err := os.OpenRoot(s.dir)
+	if err != nil {
+		return nil, err
+	}
+	defer root.Close() //nolint:errcheck
+	found := ""
+	err = fs.WalkDir(root.FS(), ".", func(rel string, d fs.DirEntry, err error) error {
+		switch {
+		case err != nil:
+			return err
+		case rel != "." && strings.HasPrefix(d.Name(), "."):
+			if d.IsDir() {
+				return fs.SkipDir
+			}
+		case d.Name() == name && d.Type().IsRegular():
+			found = rel
+			return fs.SkipAll
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	if found == "" {
+		return nil, fs.ErrNotExist
+	}
+	return root.Open(found)
 }
 
 // images returns the names of the images next to note id.
@@ -156,11 +194,17 @@ func (s *store) copyImages(body, from, to string) {
 func (s *store) cleanImages(now time.Time) (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	used := map[string]bool{} // slash-separated paths relative to s.dir
+	// Lower-case slash-separated paths relative to s.dir: directories
+	// differing in case may be the same on the file system.
+	used := map[string]bool{}
+	anywhere := map[string]bool{} // names referenced as /images/<name>, found in any directory
 	for id, n := range s.notes {
 		dir, _ := s.noteDir(id)
 		for _, name := range imageRef.FindAllString(n.Body, -1) {
-			used[path.Join(filepath.ToSlash(dir), name)] = true
+			used[strings.ToLower(path.Join(filepath.ToSlash(dir), name))] = true
+		}
+		for _, m := range oldImageRef.FindAllStringSubmatch(n.Body, -1) {
+			anywhere[m[2]] = true
 		}
 	}
 	root, err := os.OpenRoot(s.dir)
@@ -184,7 +228,7 @@ func (s *store) cleanImages(now time.Time) (int, error) {
 				dirs = append(dirs, rel)
 			}
 			return nil
-		case !d.Type().IsRegular() || !imageName.MatchString(d.Name()) || used[rel]:
+		case !d.Type().IsRegular() || !imageName.MatchString(d.Name()) || used[strings.ToLower(rel)] || anywhere[d.Name()]:
 			return nil
 		}
 		info, err := d.Info()
@@ -224,7 +268,8 @@ func (s *store) uploadImage(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid request", http.StatusBadRequest)
 		return
 	}
-	name, err := s.putImage(r.PathValue("id"), data)
+	id := r.PathValue("id")
+	name, err := s.putImage(id, data)
 	switch {
 	case errors.Is(err, errBadImage):
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -232,6 +277,8 @@ func (s *store) uploadImage(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "no such note", http.StatusNotFound)
 	case err != nil:
 		serverError(w, err)
+	case id == "": // POST /api/images of app versions before images moved next to notes
+		writeJSON(w, map[string]string{"path": "/images/" + name})
 	default:
 		writeJSON(w, map[string]string{"name": name})
 	}
@@ -239,7 +286,13 @@ func (s *store) uploadImage(w http.ResponseWriter, r *http.Request) {
 
 func (s *store) serveImage(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
-	f, err := s.openImage(r.PathValue("id"), name)
+	var f *os.File
+	var err error
+	if id := r.PathValue("id"); id != "" {
+		f, err = s.openImage(id, name)
+	} else {
+		f, err = s.findImage(name) // GET /api/images/{name}: a reference of the former layout
+	}
 	if errors.Is(err, fs.ErrNotExist) {
 		http.NotFound(w, r)
 		return

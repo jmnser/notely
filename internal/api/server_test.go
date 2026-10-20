@@ -20,6 +20,7 @@ func TestOpen(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	annImage := pngName(t)
 	srv := httptest.NewServer(s)
 	defer srv.Close()
 	jar, _ := cookiejar.New(nil)
@@ -54,7 +55,10 @@ func TestOpen(t *testing.T) {
 		{"cross origin", "PUT", "/api/notes/a", "{}", []string{"Origin", "https://evil.example"}, http.StatusForbidden},
 		{"logout", "POST", "/api/logout", "", nil, http.StatusNoContent},
 		{"login bob", "POST", "/api/login", `{"user":"bob","password":"pw2"}`, nil, http.StatusOK},
-		{"other user's image", "POST", "/api/notes/a/images", string(pngData(t)), nil, http.StatusNotFound},
+		{"other user's note: upload", "POST", "/api/notes/a/images", string(pngData(t)), nil, http.StatusNotFound},
+		{"other user's note: images", "GET", "/api/notes/a/images", "", nil, http.StatusNotFound},
+		{"other user's image", "GET", "/api/notes/a/images/" + annImage, "", nil, http.StatusNotFound},
+		{"other user's image, old form", "GET", "/api/images/" + annImage, "", nil, http.StatusNotFound},
 	} {
 		if got := do(tt.method, tt.path, tt.body, tt.header...); got != tt.want {
 			t.Errorf("%s: %d, want %d", tt.name, got, tt.want)

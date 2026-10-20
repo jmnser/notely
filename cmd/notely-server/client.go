@@ -83,14 +83,19 @@ func exchange(push []note.Note, deleted []string) ([]note.Note, map[string]error
 }
 
 // uploadImage stores an image file (a JavaScript Blob) next to note n on the
-// backend, pushing n first so the backend knows where it lives, and returns
+// backend, pushing n first if the backend does not know it yet, and returns
 // the image's name, which n references it by.
 func uploadImage(n note.Note, file app.Value) (string, error) {
-	if err := call(put, "/api/notes/"+n.ID, n, nil); err != nil {
-		return "", err
-	}
 	var out struct{ Name string }
-	err := send(post, "/api/notes/"+n.ID+"/images", file, file.Get("type").String(), uploadTimeout, &out)
+	upload := func() error {
+		return send(post, "/api/notes/"+n.ID+"/images", file, file.Get("type").String(), uploadTimeout, &out)
+	}
+	err := upload()
+	if errors.Is(err, errNotFound) {
+		if err = call(put, "/api/notes/"+n.ID, n, nil); err == nil {
+			err = upload()
+		}
+	}
 	return out.Name, err
 }
 
@@ -103,11 +108,6 @@ func listImages(id string) ([]string, error) {
 		return nil, nil
 	}
 	return names, err
-}
-
-// imageBase is the URL path the images next to note id are served under.
-func imageBase(id string) string {
-	return rootPrefix() + "/api/notes/" + id + "/images/"
 }
 
 // rootPrefix is the path the app is served under, without a trailing slash.

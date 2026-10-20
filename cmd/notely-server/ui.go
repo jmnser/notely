@@ -765,7 +765,7 @@ func (u *ui) signOut(app.Context, app.Event) {
 // or the note changed.
 func (u *ui) rendered(src string) string {
 	if key := u.current + "\n" + src; u.html == "" || key != u.htmlSrc {
-		u.html, u.htmlSrc = render(src, imageBase(u.current)), key
+		u.html, u.htmlSrc = render(src, rootPrefix(), u.current), key
 	}
 	return u.html
 }
@@ -952,6 +952,10 @@ func (u *ui) openImages(app.Context, app.Event) {
 				return
 			}
 			switch {
+			case errors.Is(err, errSignedOut):
+				app.Window().GetElementByID("images").Call("close")
+				u.signedOut = true
+				u.listen()
 			case err != nil:
 				app.Log(err)
 				u.imagesMsg = "Can't load the images: " + err.Error()
@@ -966,7 +970,7 @@ func (u *ui) openImages(app.Context, app.Event) {
 
 // renderImages renders the dialog listing the images next to the open note.
 func (u *ui) renderImages() app.UI {
-	base := imageBase(u.current)
+	base := imageBase(rootPrefix(), u.current)
 	return app.Dialog().ID("images").Body(
 		app.H2().Text("Images in this space"),
 		app.P().Text("Images are named after their content. Select one to insert it.").Hidden(len(u.images) == 0),
