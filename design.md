@@ -73,7 +73,7 @@ updated: 2026-10-15T09:12:00.123Z
 
 ### Images
 
-- `POST /api/images` stores a PNG, JPEG, GIF or WebP image of up to 10 MiB as `<data>/.images/<hash>.<ext>`, named after the first 128 bits of its SHA-256, and answers `{"path": "/images/<name>"}`. The type comes from the content, not the request; SVG is refused because it can carry scripts. The same image is stored once.
+- `POST /api/images` stores a PNG, JPEG, GIF or WebP image of up to 2 MiB as `<data>/.images/<hash>.<ext>`, named after the first 128 bits of its SHA-256, and answers `{"path": "/images/<name>"}`. The type comes from the content, not the request; SVG is refused because it can carry scripts. The same image is stored once. Larger images stored under the former 10 MiB limit are still served.
 - Notes reference it as `![alt](/images/<name>)`. The app loads it from `GET /api/images/<name>` (signed on, cached as immutable, `sandbox` CSP); the git backup copies `.images/` to `images/`, where GitHub resolves the same root-relative link. Links `[text](/images/<name>)` work the same.
 - In edit mode the image button or pasting an image uploads it and inserts the Markdown at the cursor.
 

@@ -101,7 +101,7 @@ Serve over HTTPS beyond localhost; see [design.md](design.md#sign-on).
 
 ## Images
 
-In edit mode, the image button or pasting an image uploads it and inserts `![name](/images/<hash>.png)`. Images (PNG, JPEG, GIF, WebP, up to 10 MiB) live in `<data>/.images/` and are part of the git backup under `images/`.
+In edit mode, the image button or pasting an image uploads it and inserts `![name](/images/<hash>.png)`. Images (PNG, JPEG, GIF, WebP, up to 2 MiB) live in `<data>/.images/` and are part of the git backup under `images/`.
 
 ## Git backup
 
