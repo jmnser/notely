@@ -21,8 +21,9 @@ const (
 
 var validID = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
 
-func newHandler(s *store) http.Handler {
+func newHandler(s *store, ev *events) http.Handler {
 	mux := http.NewServeMux()
+	mux.HandleFunc("GET /api/events", ev.serve)
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	})
@@ -54,6 +55,7 @@ func newHandler(s *store) http.Handler {
 			serverError(w, err)
 			return
 		}
+		ev.notify(r.Header.Get(clientHeader))
 		writeJSON(w, n)
 	})
 	mux.HandleFunc("DELETE /api/notes/{id}", func(w http.ResponseWriter, r *http.Request) {
@@ -66,6 +68,7 @@ func newHandler(s *store) http.Handler {
 			serverError(w, err)
 			return
 		}
+		ev.notify(r.Header.Get(clientHeader))
 		w.WriteHeader(http.StatusNoContent)
 	})
 	return mux

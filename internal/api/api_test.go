@@ -39,7 +39,7 @@ func TestAPI(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	h := newHandler(s)
+	h := newHandler(s, newEvents())
 
 	if got := list(t, h); len(got) != 0 {
 		t.Fatalf("new store has notes: %v", got)
@@ -66,7 +66,7 @@ func TestAPI(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := list(t, newHandler(s)); len(got) != 1 || got[0].Body != "text" {
+	if got := list(t, newHandler(s, newEvents())); len(got) != 1 || got[0].Body != "text" {
 		t.Fatalf("after reopen = %+v", got)
 	}
 }
@@ -76,7 +76,7 @@ func TestAPIRejects(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	h := newHandler(s)
+	h := newHandler(s, newEvents())
 
 	tests := []struct {
 		name, path, body string

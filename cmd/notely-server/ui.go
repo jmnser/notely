@@ -78,6 +78,13 @@ type ui struct {
 	update    bool // a new app version is available
 	backDepth int  // history entries pushed for in-app back steps, see syncBack
 	skipPop   int  // popstate events caused by syncBack itself
+	events    *eventSource
+}
+
+// eventSource is an open stream of the backend's change events.
+type eventSource struct {
+	es    app.Value
+	funcs []app.Func
 }
 
 func init() {
@@ -139,7 +146,45 @@ func (u *ui) OnMount(ctx app.Context) {
 	})
 	app.Window().Get("document").Call("addEventListener", "visibilitychange", flush)
 	app.Window().Call("addEventListener", "pagehide", flush)
+	app.Window().Get("document").Call("addEventListener", "visibilitychange", app.FuncOf(func(app.Value, []app.Value) any {
+		ctx.Dispatch(func(app.Context) { u.listen() })
+		return nil
+	}))
 	u.sync(ctx)
+}
+
+// listen keeps a stream of the backend's change events open while the page is
+// visible and signed on. It syncs when the stream opens, which also catches
+// up after the page was hidden, and on each change made elsewhere.
+func (u *ui) listen() {
+	visible := app.Window().Get("document").Get("visibilityState").String() == "visible"
+	if ev := u.events; ev != nil && (u.signedOut || !visible || ev.es.Get("readyState").Int() == 2) {
+		ev.es.Call("close")
+		for _, f := range ev.funcs {
+			f.Release()
+		}
+		u.events = nil
+	}
+	if u.events != nil || u.signedOut || !visible {
+		return
+	}
+	es := app.Window().Get("EventSource").New(rootPrefix() + "/api/events?client=" + clientID)
+	sync := app.FuncOf(func(app.Value, []app.Value) any {
+		u.ctx.Dispatch(u.sync)
+		return nil
+	})
+	failed := app.FuncOf(func(app.Value, []app.Value) any {
+		if es.Get("readyState").Int() == 2 { // given up, e.g. signed out or the server is down
+			u.ctx.Dispatch(func(ctx app.Context) {
+				ctx.After(retry, func(app.Context) { u.listen() })
+			})
+		}
+		return nil
+	})
+	es.Set("onopen", sync)
+	es.Set("onmessage", sync)
+	es.Set("onerror", failed)
+	u.events = &eventSource{es: es, funcs: []app.Func{sync, failed}}
 }
 
 func (u *ui) OnAppUpdate(ctx app.Context) {
@@ -705,6 +750,7 @@ func (u *ui) signOut(app.Context, app.Event) {
 			}
 			u.open("")
 			u.signedOut = true
+			u.listen()
 		},
 	}, "")
 }
@@ -1147,6 +1193,7 @@ func (u *ui) sync(app.Context) {
 	u.ctx.Async(func() {
 		remote, rejected, err := exchange(push, deleted)
 		u.ctx.Dispatch(func(ctx app.Context) {
+			defer u.listen()      // opens once signed on, closes once signed out
 			if gen != u.syncGen { // signed out meanwhile
 				return
 			}

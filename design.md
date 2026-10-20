@@ -92,6 +92,7 @@ The app is local first:
 2. When changes pause for 500 ms, the state is written to `localStorage` and synced; when the page is hidden or closed, it is written at once. Saving keeps pending notes another tab stored that are newer than this tab's copy, so they sync on the next start rather than being lost; this tab does not push them, as their tab may still change them.
 3. A sync pushes pending notes and deletions, fetches the backend's list and merges it: pending local changes win, everything else comes from the backend.
 4. Syncs also run on start, on window focus, when the browser comes back online and every 30 s after a failure.
+5. While the page is visible and signed on, it keeps a server-sent event stream, `GET /api/events`, open and syncs when it opens and whenever another app changes a note, so changes show up within about a second. Each page sends a random client ID with its requests and is not told about its own changes. The stream closes while the page is hidden, sends a heartbeat every 25 s for proxies, and ends when the server shuts down. Up to 100 streams are served.
 
 IDs are generated in the browser, which is what lets notes be created offline.
 
