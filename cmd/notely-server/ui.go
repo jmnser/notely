@@ -878,7 +878,7 @@ func (u *ui) newline(ctx app.Context, e app.Event) {
 // imageAccept and maxImage are the image types and size the backend stores.
 const (
 	imageAccept = "image/png,image/jpeg,image/gif,image/webp"
-	maxImage    = 10 << 20
+	maxImage    = 2 << 20
 )
 
 // insertImages uploads image files (a JavaScript FileList) and inserts a
@@ -893,7 +893,7 @@ func (u *ui) insertImages(files app.Value) {
 			return
 		}
 		if f.Get("size").Int() > maxImage {
-			u.status = "Images can be up to 10 MiB."
+			u.status = "Images can be up to 2 MiB."
 			u.ctx.Update()
 			return
 		}

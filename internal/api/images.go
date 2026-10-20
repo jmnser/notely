@@ -14,7 +14,7 @@ import (
 )
 
 const (
-	maxImage = 10 << 20
+	maxImage = 2 << 20
 	imageDir = ".images" // under the notes directory; dot files are not notes
 )
 
@@ -53,11 +53,11 @@ func (im *images) handler() http.Handler {
 }
 
 func (im *images) upload(w http.ResponseWriter, r *http.Request) {
-	// The server's read timeout is too short for 10 MiB over a slow phone link.
+	// The server's read timeout is too short for 2 MiB over a slow phone link.
 	_ = http.NewResponseController(w).SetReadDeadline(time.Now().Add(2 * time.Minute))
 	data, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxImage))
 	if _, ok := errors.AsType[*http.MaxBytesError](err); ok {
-		http.Error(w, "image larger than 10 MiB", http.StatusBadRequest)
+		http.Error(w, "image larger than 2 MiB", http.StatusBadRequest)
 		return
 	} else if err != nil {
 		http.Error(w, "invalid request", http.StatusBadRequest)
