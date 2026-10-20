@@ -269,6 +269,7 @@ func (u *ui) Render() app.UI {
 				app.Range(spaces).Slice(func(i int) app.UI {
 					return u.renderSpace(spaces[i], query != "")
 				}),
+				app.If(len(spaces) > 0, func() app.UI { return app.Li().Class("divider").Attr("role", "separator") }),
 				u.renderAssets(query),
 			),
 			app.Div().Class("drawer-bottom").Body(
