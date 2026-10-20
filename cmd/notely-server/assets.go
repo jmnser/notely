@@ -84,7 +84,7 @@ func (u *ui) renderAssetSpace(s assetSpace, count int, searching bool, subs []as
 	)
 }
 
-// renderAsset renders a row with asset a's thumbnail.
+// renderAsset renders a row for asset a.
 func (u *ui) renderAsset(a asset) app.UI {
 	row := "note-row asset-row"
 	if a.key() == u.asset {
@@ -93,7 +93,6 @@ func (u *ui) renderAsset(a asset) app.UI {
 	scope := app.EventScope(a.key())
 	return app.Li().Class(row).Body(
 		app.Button().Class("note").Body(
-			app.Img().Class("thumb").Src(assetURL(a)).Alt("").Attr("loading", "lazy"),
 			app.Span().Class("note-title").Text(a.Name),
 			app.Span().Class("note-meta").Text(a.Uploaded.Local().Format("Jan 2, 15:04")),
 		).OnClick(func(app.Context, app.Event) { u.openAsset(a.key()) }, scope),
