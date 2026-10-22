@@ -8,3 +8,4 @@ notes.json*
 /.claude/worktrees/
 .claude-worktree.md
 /.task/
+/notely-tui
