@@ -1,8 +1,8 @@
 name: dev image
 
 # Every push to a pull request pushes an image tagged
-# <latest release tag>-dev-<short commit hash>, to try the change before it
-# is merged.
+# <latest release tag in the branch>-dev-<short commit hash>, to try the
+# change before it is merged.
 on:
   pull_request:
     types: [opened, synchronize, reopened]
@@ -16,8 +16,10 @@ concurrency:
 
 jobs:
   image:
-    # Pull requests from forks get no secrets.
-    if: github.event.pull_request.head.repo.full_name == github.repository && vars.DOCKERHUB_USERNAME
+    # Pull requests from forks and Dependabot get no secrets.
+    if: >-
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.actor != 'dependabot[bot]' && vars.DOCKERHUB_USERNAME
     runs-on: ubuntu-latest
     env:
       IMAGE: docker.io/${{ vars.DOCKERHUB_USERNAME }}/notely
@@ -61,10 +63,8 @@ jobs:
           build-args: |
             VERSION=${{ steps.version.outputs.version }}
             REVISION=${{ steps.version.outputs.sha }}
-          cache-from: |
-            type=gha,scope=notely
-            type=gha,scope=notely-dev
-          cache-to: type=gha,mode=max,scope=notely-dev
+          # Reads the release cache only: per-PR caches would evict it.
+          cache-from: type=gha,scope=notely
       - name: Summary
         run: echo "Image \`$IMAGE:$VERSION\`" >> "$GITHUB_STEP_SUMMARY"
         env:
