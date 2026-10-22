@@ -1330,10 +1330,25 @@ func (u *ui) persist() {
 	}
 	mine := cache{User: u.user, Notes: u.notes, Dirty: slices.Collect(maps.Keys(u.dirty)), Deleted: u.deleted}
 	c := withPending(mine, stored)
-	if err := u.ctx.LocalStorage().Set(storageKey, c); err != nil {
+	err := u.ctx.LocalStorage().Set(storageKey, c)
+	if err != nil {
+		// Over the quota, most likely: drawings are large. Synced ones load
+		// again with the next sync.
+		err = u.ctx.LocalStorage().Set(storageKey, withoutSyncedDrawings(c))
+	}
+	if err != nil {
 		app.Log(err)
 		u.status = "Could not save on this device."
 	}
+}
+
+// withoutSyncedDrawings returns c without the drawings that have no pending
+// change.
+func withoutSyncedDrawings(c cache) cache {
+	c.Notes = slices.DeleteFunc(slices.Clone(c.Notes), func(n note.Note) bool {
+		return n.Kind == note.Drawing && !slices.Contains(c.Dirty, n.ID)
+	})
+	return c
 }
 
 // withPending adds to c the pending notes another tab stored that are newer

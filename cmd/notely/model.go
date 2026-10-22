@@ -456,6 +456,9 @@ func (m *model) action(msg tea.KeyPressMsg) (tea.Cmd, bool) {
 	}
 	c := *n
 	switch {
+	case key.Matches(msg, keys.edit) && c.Kind == note.Drawing:
+		m.status = drawingText
+		return nil, true
 	case key.Matches(msg, keys.edit):
 		return m.edit(c), true
 	case key.Matches(msg, keys.pin):
@@ -732,9 +735,16 @@ func (m *model) reselect(k string) {
 }
 
 // render shows the open note as Markdown.
+// drawingText stands in for drawings, which only the web app shows.
+const drawingText = "Drawing: open it in the web app to view or edit it."
+
 func (m *model) render() {
 	n := m.find(m.current)
 	if n == nil || m.width == 0 {
+		return
+	}
+	if n.Kind == note.Drawing {
+		m.view.SetContent(drawingText)
 		return
 	}
 	style := "light"

@@ -193,7 +193,7 @@ Material Design 3 is implemented in plain CSS (`web/app.css`: M3 color, type, sh
 - Only whole top-level spaces can be shared, not single notes.
 - An image uploaded to a note is stored twice: next to the note and in Assets. Assets need the backend and do not show offline.
 - Images need the backend: uploading needs a connection, and images not yet loaded do not show offline. An image used in several spaces is stored in each. Images are stored as uploaded, including metadata such as a photo's GPS location, and go into the git backup.
-- Drawings are saved whole: concurrent edits on two devices keep the last one, not both. Drawings have no image tool; pasted images count towards their 2 MiB.
+- Drawings are saved whole: concurrent edits on two devices keep the last one, not both. Drawings have no image tool; pasted images count towards their 2 MiB. The app refuses to save a drawing over that size. When the browser storage is full, synced drawings are left out of it and do not show offline. The terminal client lists drawings but only the web app shows and edits them.
 - Sessions and the last git backup results are lost on backend restart.
 - Git backup is one-way; edits made in the repository are not imported.
 - `notely` runs once per server and user account at a time.

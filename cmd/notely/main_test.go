@@ -127,6 +127,10 @@ func TestMatches(t *testing.T) {
 			t.Errorf("matches(%q) = %v, want %v", query, got, want)
 		}
 	}
+	d := note.Note{Kind: note.Drawing, Title: "Flow", Body: `{"elements":[]}`}
+	if !matches(d, "flow") || matches(d, "elements") {
+		t.Error("drawings match by body or not by title")
+	}
 }
 
 // keysOf lists the rows of the list by key, indented by depth.

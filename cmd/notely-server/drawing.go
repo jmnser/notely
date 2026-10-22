@@ -92,10 +92,9 @@ func (u *ui) canvas() {
 	e.change = app.FuncOf(func(_ app.Value, args []app.Value) any {
 		body := args[0].String()
 		u.ctx.Dispatch(func(app.Context) {
-			if u.editor == e {
+			if u.saveDrawing(e.id, body) && u.editor == e {
 				e.body = body
 			}
-			u.editNote(e.id, func(n *note.Note) { n.Body = body })
 		})
 		return nil
 	})
@@ -110,10 +109,23 @@ func (u *ui) flushEditor() {
 	if u.editor == nil {
 		return
 	}
-	if body := u.editor.handle.Call("flush"); body.Truthy() {
+	if body := u.editor.handle.Call("flush"); body.Truthy() && u.saveDrawing(u.editor.id, body.String()) {
 		u.editor.body = body.String()
-		u.editNote(u.editor.id, func(n *note.Note) { n.Body = u.editor.body })
 	}
+}
+
+// maxDrawing is the server's limit on a drawing's scene, in bytes.
+const maxDrawing = 2 << 20
+
+// saveDrawing stores body as drawing id's scene unless the server would
+// reject it as too large; it reports whether it did.
+func (u *ui) saveDrawing(id, body string) bool {
+	if len(body) > maxDrawing {
+		u.status = "Drawing too large to save (over 2 MiB). Remove images from it."
+		return false
+	}
+	u.editNote(id, func(n *note.Note) { n.Body = body })
+	return true
 }
 
 // closeEditor removes the editor; it saves pending changes first.
