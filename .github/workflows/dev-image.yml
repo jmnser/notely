@@ -1,0 +1,71 @@
+name: dev image
+
+# Every push to a pull request pushes an image tagged
+# <latest release tag in the branch>-dev-<short commit hash>, to try the
+# change before it is merged.
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dev-image-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  image:
+    # Pull requests from forks and Dependabot get no secrets.
+    if: >-
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.actor != 'dependabot[bot]' && vars.DOCKERHUB_USERNAME
+    runs-on: ubuntu-latest
+    env:
+      IMAGE: docker.io/${{ vars.DOCKERHUB_USERNAME }}/notely
+    steps:
+      # The pull request's commit, not the merge commit GitHub tests.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Version
+        id: version
+        run: |
+          tag=$(git describe --tags --abbrev=0 --match 'v[0-9]*' 2>/dev/null || echo v0.0.0)
+          sha=$(git rev-parse HEAD)
+          echo "version=$tag-dev-${sha:0:7}" >> "$GITHUB_OUTPUT"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          username: ${{ vars.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      # Tags are immutable on Docker Hub, so a re-run of the same commit skips.
+      - name: Already pushed
+        id: exists
+        run: |
+          if docker buildx imagetools inspect "$IMAGE:$VERSION" >/dev/null 2>&1; then
+            echo "$IMAGE:$VERSION exists"
+            echo "yes=true" >> "$GITHUB_OUTPUT"
+          fi
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+      # The Dockerfile cross-compiles, so no QEMU is needed for arm64.
+      - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        if: ${{ !steps.exists.outputs.yes }}
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ env.IMAGE }}:${{ steps.version.outputs.version }}
+          build-args: |
+            VERSION=${{ steps.version.outputs.version }}
+            REVISION=${{ steps.version.outputs.sha }}
+          # Reads the release cache only: per-PR caches would evict it.
+          cache-from: type=gha,scope=notely
+      - name: Summary
+        run: echo "Image \`$IMAGE:$VERSION\`" >> "$GITHUB_STEP_SUMMARY"
+        env:
+          VERSION: ${{ steps.version.outputs.version }}

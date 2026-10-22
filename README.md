@@ -49,7 +49,7 @@ task image VERSION=v1.2.3
 docker run -d --name notely --stop-timeout 70 -p 8000:8000 -v notely:/data notely:v1.2.3
 ```
 
-Releases push it for `linux/amd64` and `linux/arm64` to `docker.io/<DOCKERHUB_USERNAME>/notely`, tagged with the version (tags are immutable, so there is no `latest`). The release workflow needs the repository variable `DOCKERHUB_USERNAME` and the secret `DOCKERHUB_TOKEN`, a Docker Hub access token with read and write access.
+Releases push it for `linux/amd64` and `linux/arm64` to `docker.io/<DOCKERHUB_USERNAME>/notely`, tagged with the version (tags are immutable, so there is no `latest`). The release workflow needs the repository variable `DOCKERHUB_USERNAME` and the secret `DOCKERHUB_TOKEN`, a Docker Hub access token with read and write access. Every push to a pull request from this repository also pushes a dev image, tagged `<latest release tag in the branch>-dev-<short commit hash>` such as `v0.14.0-dev-1a2b3c4`, to try the change before merging. Dev tags are not cleaned up; prune them on Docker Hub.
 
 ## Upgrading to v0.5.0
 
