@@ -54,6 +54,15 @@ func TestStoreLayout(t *testing.T) {
 	put(note.Note{ID: "d", Title: ""})
 	check("Plan.md", "plan-2.md", "untitled.md", "work/a-b- c-.md")
 
+	put(note.Note{ID: "f", Kind: note.Drawing, Title: "Plan"}) // drawings have their own names
+	put(note.Note{ID: "g", Kind: note.Drawing, Title: "Plan"})
+	check("Plan-2.excalidraw", "Plan.excalidraw", "Plan.md", "plan-2.md", "untitled.md", "work/a-b- c-.md")
+	for _, id := range []string{"f", "g"} {
+		if err := s.delete(id); err != nil {
+			t.Fatal(err)
+		}
+	}
+
 	put(note.Note{ID: "a", Title: "Plan", Body: "edited"}) // same title keeps the file
 	put(note.Note{ID: "b", Title: "plan"})                 // keeps its suffix
 	check("Plan.md", "plan-2.md", "untitled.md", "work/a-b- c-.md")
@@ -80,6 +89,7 @@ func TestStoreLayout(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(dir, "notes-2.md")); err != nil {
 		t.Fatal(err)
 	}
+	put(note.Note{ID: "h", Kind: note.Drawing, Space: "home", Title: "Sketch", Body: `{"elements":[]}`})
 
 	s, err = openStore(dir)
 	if err != nil {
@@ -91,7 +101,7 @@ func TestStoreLayout(t *testing.T) {
 		ids = append(ids, n.ID)
 	}
 	slices.Sort(ids)
-	if want := []string{"a", "b", "c", "d", "e"}; !slices.Equal(ids, want) {
+	if want := []string{"a", "b", "c", "d", "e", "h"}; !slices.Equal(ids, want) {
 		t.Errorf("reopened ids = %q, want %q", ids, want)
 	}
 }
@@ -105,18 +115,55 @@ func TestEncodeDecode(t *testing.T) {
 		Pinned:  true,
 		Updated: time.Date(2026, 10, 15, 9, 12, 0, 123, time.UTC),
 	}
-	got, err := decode(encode(n))
+	data, err := encode(n)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := decode(data, ".md")
 	if err != nil || got != n {
 		t.Fatalf("decode(encode) = %+v, %v; want %+v", got, err, n)
 	}
 
-	got, err = decode([]byte("---\r\nid: x\r\ntitle: Plain title\r\nextra: 1\r\n---\r\nbody"))
+	got, err = decode([]byte("---\r\nid: x\r\ntitle: Plain title\r\nextra: 1\r\n---\r\nbody"), ".md")
 	if err != nil || got.ID != "x" || got.Title != "Plain title" || got.Body != "body" {
 		t.Errorf("hand-written = %+v, %v", got, err)
 	}
 
 	for _, bad := range []string{"# no front matter", "---\nid: x\n", "---\ntitle: no id\n---\n", "---\nid: x\nupdated: soon\n---\n"} {
-		if _, err := decode([]byte(bad)); err == nil {
+		if _, err := decode([]byte(bad), ".md"); err == nil {
+			t.Errorf("decode(%q) succeeded", bad)
+		}
+	}
+}
+
+func TestEncodeDecodeDrawing(t *testing.T) {
+	n := note.Note{
+		ID: "id_1", Kind: note.Drawing, Space: "work", Title: "Flow <1>", Pinned: true,
+		Body:    `{"appState":{"viewBackgroundColor":"#fff"},"elements":[{"id":"x","text":"a<b"}],"type":"excalidraw","version":2}`,
+		Updated: time.Date(2026, 10, 15, 9, 12, 0, 123, time.UTC),
+	}
+	data, err := encode(n)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "\n  \"notely\": {\n") || !strings.Contains(string(data), `"a<b"`) {
+		t.Errorf("file not indented or HTML-escaped:\n%s", data)
+	}
+	got, err := decode(data, ".excalidraw")
+	if err != nil || got != n {
+		t.Fatalf("decode(encode) = %+v, %v; want %+v", got, err, n)
+	}
+
+	n.Body = ""
+	if data, err = encode(n); err != nil {
+		t.Fatal(err)
+	}
+	if got, err = decode(data, ".excalidraw"); err != nil || got.Body != `{"elements":[],"type":"excalidraw","version":2}` {
+		t.Errorf("empty drawing = %q, %v", got.Body, err)
+	}
+
+	for _, bad := range []string{`not json`, `{"type":"excalidraw"}`, `{"notely":{"id":"a/b"}}`} {
+		if _, err := decode([]byte(bad), ".excalidraw"); err == nil {
 			t.Errorf("decode(%q) succeeded", bad)
 		}
 	}
@@ -146,7 +193,7 @@ func TestStoreDuplicateID(t *testing.T) {
 	old := note.Note{ID: "a", Title: "Old", Updated: time.Now().Add(-time.Hour)}
 	newer := note.Note{ID: "a", Title: "New", Updated: time.Now()}
 	for name, n := range map[string]note.Note{"Old.md": old, "New.md": newer} { // a crash while renaming
-		if err := os.WriteFile(filepath.Join(dir, name), encode(n), 0o600); err != nil {
+		if err := os.WriteFile(filepath.Join(dir, name), encodeMarkdown(n), 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}

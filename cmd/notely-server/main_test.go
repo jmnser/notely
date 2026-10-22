@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 
@@ -102,10 +103,23 @@ func TestManifestID(t *testing.T) {
 }
 
 func TestSecurityHeaders(t *testing.T) {
-	w := httptest.NewRecorder()
-	securityHeaders(http.NotFoundHandler()).ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/", nil))
-	if csp := w.Header().Get("Content-Security-Policy"); !strings.Contains(csp, "img-src 'self' data: blob:") ||
-		!strings.Contains(csp, "frame-ancestors 'none'") {
-		t.Errorf("Content-Security-Policy = %q", csp)
+	h := securityHeaders(http.NotFoundHandler())
+	for path, want := range map[string]bool{"/": true, "/notely/app-worker.js": false} {
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, path, nil))
+		csp := w.Header().Get("Content-Security-Policy")
+		if !strings.Contains(csp, "img-src 'self' data: blob:") || !strings.Contains(csp, "frame-ancestors 'none'") {
+			t.Errorf("%s: Content-Security-Policy = %q", path, csp)
+		}
+		if got := strings.Contains(csp, "connect-src 'self'"); got != want {
+			t.Errorf("%s: connect-src limited = %v, want %v", path, got, want)
+		}
+	}
+}
+
+func TestOnDemand(t *testing.T) {
+	files := onDemand()
+	if !slices.Contains(files, "/web/excalidraw/index.js") || !slices.Contains(files, "/web/mermaid/mermaid.min.js") {
+		t.Errorf("onDemand() = %q", files)
 	}
 }

@@ -3,6 +3,8 @@ package main
 import (
 	"strings"
 	"testing"
+
+	"github.com/jmnser/notely/internal/note"
 )
 
 const list = "# Todo\n\n- [ ] one\n- [x] two\n\n```\n- [ ] in code\n```\n\n1. [X] three\n   - [ ] nested\n"
@@ -132,6 +134,20 @@ func TestRenderImages(t *testing.T) {
 	}
 }
 
+func TestRenderDrawings(t *testing.T) {
+	got := render("![](Flow.excalidraw) ![alt](<My \"x\".excalidraw>) ![](https://example.com/a.excalidraw) ![](pic.png)", "", "a")
+	for _, want := range []string{
+		`<button type="button" class="drawing" data-drawing="Flow.excalidraw">Flow</button>`,
+		`data-drawing="My &#34;x&#34;.excalidraw">My &#34;x&#34;</button>`,
+		`<img src="https://example.com/a.excalidraw"`,
+		`<img src="pic.png"`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("render() lacks %q:\n%s", want, got)
+		}
+	}
+}
+
 func TestImageMarkdown(t *testing.T) {
 	for file, want := range map[string]string{
 		"cat.png":      "![cat](x.png)\n",
@@ -141,5 +157,34 @@ func TestImageMarkdown(t *testing.T) {
 		if got := imageMarkdown(file, "x.png"); got != want {
 			t.Errorf("imageMarkdown(%q) = %q, want %q", file, got, want)
 		}
+	}
+}
+
+func TestDrawingPath(t *testing.T) {
+	tests := []struct{ ref, space, wantSpace, wantTitle string }{
+		{"Flow.excalidraw", "Work", "Work", "Flow"},
+		{"My%20Flow.excalidraw", "", "", "My Flow"},
+		{"Home/Plans/Flow.excalidraw", "Work", "Home/Plans", "Flow"},
+		{"/Flow.excalidraw", "Work", "", "Flow"},
+		{"Notes/Flow.excalidraw", "Work", "", "Flow"},
+	}
+	for _, tt := range tests {
+		if s, title := drawingPath(tt.ref, tt.space); s != tt.wantSpace || title != tt.wantTitle {
+			t.Errorf("drawingPath(%q, %q) = %q, %q; want %q, %q", tt.ref, tt.space, s, title, tt.wantSpace, tt.wantTitle)
+		}
+	}
+}
+
+func TestFindDrawing(t *testing.T) {
+	notes := []note.Note{
+		{ID: "1", Space: "Work", Title: "Flow"},
+		{ID: "2", Kind: note.Drawing, Space: "Home", Title: "Flow"},
+		{ID: "3", Kind: note.Drawing, Space: "Work", Title: "flow "},
+	}
+	if d := findDrawing(notes, "Work", "Flow"); d == nil || d.ID != "3" {
+		t.Errorf("findDrawing = %+v, want 3", d)
+	}
+	if d := findDrawing(notes, "", "Flow"); d != nil {
+		t.Errorf("findDrawing in the default space = %+v", d)
 	}
 }

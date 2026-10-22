@@ -21,7 +21,8 @@ import (
 const noteExt = ".md"
 
 // store keeps a user's notes in memory and persists each one as
-// <dir>/<space>/<title>.md, with the images they use next to them.
+// <dir>/<space>/<title>.md, drawings as <title>.excalidraw, with the images
+// they use next to them.
 type store struct {
 	mu    sync.Mutex
 	dir   string
@@ -46,7 +47,7 @@ func openStore(dir string) (*store, error) {
 				return filepath.SkipDir
 			}
 			return nil
-		case d.IsDir() || filepath.Ext(path) != noteExt:
+		case d.IsDir() || !noteFile(path):
 			return nil
 		}
 		rel, err := filepath.Rel(dir, path)
@@ -57,7 +58,7 @@ func openStore(dir string) (*store, error) {
 		if err != nil {
 			return err
 		}
-		n, err := decode(data)
+		n, err := decode(data, filepath.Ext(path))
 		if err != nil {
 			log.Printf("skip %s: %v", rel, err)
 			return nil
@@ -115,7 +116,11 @@ func (s *store) put(n note.Note) (note.Note, error) {
 	defer s.mu.Unlock()
 	old, exists := s.paths[n.ID]
 	rel := s.pathFor(n, old)
-	if err := s.write(rel, encode(n)); err != nil {
+	data, err := encode(n)
+	if err != nil {
+		return note.Note{}, err
+	}
+	if err := s.write(rel, data); err != nil {
 		return note.Note{}, err
 	}
 	if exists && old != rel && !s.sameFile(old, rel) {
@@ -145,10 +150,10 @@ func (s *store) delete(id string) error {
 }
 
 // pathFor returns where n is stored: old if it still fits n's space and title,
-// else the first free <space>/<title>[-N].md. Names compare case-insensitively,
-// as on macOS and Windows file systems.
+// else the first free <space>/<title>[-N].md (.excalidraw for drawings). Names
+// compare case-insensitively, as on macOS and Windows file systems.
 func (s *store) pathFor(n note.Note, old string) string {
-	base := fileName(n.Title, "untitled")
+	base, ext := fileName(n.Title, "untitled"), extension(n.Kind)
 	space := n.Space
 	if s.space != "" {
 		_, space, _ = strings.Cut(space, "/")
@@ -156,7 +161,7 @@ func (s *store) pathFor(n note.Note, old string) string {
 	if space != "" {
 		base = filepath.Join(s.spaceDir(fileName(space, "unnamed")), base)
 	}
-	if numbered(old, base) {
+	if numbered(old, base, ext) {
 		return old
 	}
 	used := map[string]bool{}
@@ -166,9 +171,9 @@ func (s *store) pathFor(n note.Note, old string) string {
 		}
 	}
 	for i := 1; ; i++ {
-		p := base + ".md"
+		p := base + ext
 		if i > 1 {
-			p = fmt.Sprintf("%s-%d.md", base, i)
+			p = fmt.Sprintf("%s-%d%s", base, i, ext)
 		}
 		if used[strings.ToLower(p)] {
 			continue
@@ -193,13 +198,13 @@ func (s *store) spaceDir(dir string) string {
 	}
 }
 
-// numbered reports whether path is base.md or base-N.md.
-func numbered(path, base string) bool {
+// numbered reports whether path is base+ext or base-N+ext.
+func numbered(path, base, ext string) bool {
 	rest, ok := strings.CutPrefix(path, base)
 	if !ok {
 		return false
 	}
-	if rest, ok = strings.CutSuffix(rest, ".md"); !ok {
+	if rest, ok = strings.CutSuffix(rest, ext); !ok {
 		return false
 	}
 	if rest == "" {
@@ -275,8 +280,31 @@ var reserved = map[string]bool{
 	"LPT6": true, "LPT7": true, "LPT8": true, "LPT9": true,
 }
 
-// encode renders n as Markdown with its fields in YAML front matter.
-func encode(n note.Note) []byte {
+// encode renders n as the content of its file.
+func encode(n note.Note) ([]byte, error) {
+	if n.Kind == note.Drawing {
+		return encodeDrawing(n)
+	}
+	return encodeMarkdown(n), nil
+}
+
+// decode parses a file written by encode; ext is the file's extension.
+func decode(data []byte, ext string) (note.Note, error) {
+	var n note.Note
+	var err error
+	if ext == drawingExt {
+		n, err = decodeDrawing(data)
+	} else {
+		n, err = decodeMarkdown(data)
+	}
+	if err == nil && !validID.MatchString(n.ID) {
+		err = fmt.Errorf("invalid id %q", n.ID)
+	}
+	return n, err
+}
+
+// encodeMarkdown renders n as Markdown with its fields in YAML front matter.
+func encodeMarkdown(n note.Note) []byte {
 	var b strings.Builder
 	b.WriteString("---\n")
 	fmt.Fprintf(&b, "id: %s\n", n.ID)
@@ -293,8 +321,9 @@ func encode(n note.Note) []byte {
 	return []byte(b.String())
 }
 
-// decode parses a file written by encode. Unknown keys are ignored.
-func decode(data []byte) (note.Note, error) {
+// decodeMarkdown parses a file written by encodeMarkdown. Unknown keys are
+// ignored.
+func decodeMarkdown(data []byte) (note.Note, error) {
 	var n note.Note
 	first, rest, _ := strings.Cut(string(data), "\n")
 	if strings.TrimSuffix(first, "\r") != "---" {
@@ -328,9 +357,6 @@ func decode(data []byte) (note.Note, error) {
 			}
 			n.Updated = t
 		}
-	}
-	if !validID.MatchString(n.ID) {
-		return n, fmt.Errorf("invalid id %q", n.ID)
 	}
 	n.Body = rest
 	return n, nil

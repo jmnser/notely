@@ -56,14 +56,17 @@ type ui struct {
 	deleted      []string        // note IDs whose deletion is not yet pushed
 	seq          int             // counts local changes
 	current      string          // ID of the open note
+	from         string          // ID of the note the open drawing was opened from
 	editing      bool            // the open note shows its Markdown source
 	collapsed    map[string]bool // space paths whose content is hidden
 	drawer       bool            // the sidebar is collapsed to a rail on large screens
 	pinned       map[string]bool // pinned space paths, kept on this device
 	dialog       prompt
-	html         string // rendered htmlSrc
-	mermaid      int    // Mermaid loading state: 0 not loaded, 1 loading, 2 ready
-	htmlSrc      string // note ID and source of html
+	html         string  // rendered htmlSrc
+	mermaid      int     // Mermaid loading state: 0 not loaded, 1 loading, 2 ready
+	excalidraw   int     // Excalidraw loading state, as mermaid
+	editor       *editor // shows the open drawing
+	htmlSrc      string  // note ID and source of html
 	query        string
 	status       string
 	signedOut    bool   // the backend asks for a sign-on
@@ -208,7 +211,11 @@ func (u *ui) Render() app.UI {
 	var shown []note.Note
 	known := map[string]bool{}
 	for _, n := range u.notes {
-		if strings.Contains(strings.ToLower(n.Space+"\n"+n.Title+"\n"+n.Body), query) {
+		text := n.Space + "\n" + n.Title
+		if n.Kind != note.Drawing { // a drawing's body is JSON
+			text += "\n" + n.Body
+		}
+		if strings.Contains(strings.ToLower(text), query) {
 			shown = append(shown, n)
 		}
 		for s := n.Space; s != ""; s = parentOf(s) {
@@ -220,10 +227,13 @@ func (u *ui) Render() app.UI {
 	all := slices.Sorted(maps.Keys(known)) // offered in the dialog
 
 	cur := u.find(u.current)
-	class, space, body := "app", "", ""
+	class, space, body, drawing := "app", "", "", false
 	if cur != nil {
 		class += " open"
-		space, body = cur.Space, cur.Body
+		space, drawing = cur.Space, cur.Kind == note.Drawing
+		if !drawing {
+			body = cur.Body
+		}
 	} else if u.findAsset(u.asset) != nil {
 		class += " open asset-open"
 	}
@@ -247,8 +257,14 @@ func (u *ui) Render() app.UI {
 		danger += " danger"
 	}
 
-	if u.mounted && !u.editing {
-		u.ctx.Defer(func(app.Context) { u.diagrams() })
+	if u.mounted {
+		u.ctx.Defer(func(app.Context) {
+			u.canvas()
+			if !u.editing && !drawing {
+				u.diagrams()
+				u.drawings()
+			}
+		})
 	}
 
 	// The tree keeps its shape so that go-app never replaces the editor
@@ -292,7 +308,7 @@ func (u *ui) Render() app.UI {
 						strings.ReplaceAll(note.SpaceName(space), "/", " / "))),
 				),
 				app.Div().Class("tools").Body(
-					app.Div().Class("segmented").Body(
+					app.Div().Class("segmented").Hidden(drawing).Body(
 						app.Button().Class(view).Title("View").Aria("pressed", !u.editing).
 							Body(icon("visibility"), app.Span().Text("View")).
 							OnClick(func(ctx app.Context, _ app.Event) { u.setEditing(ctx, false) }),
@@ -315,10 +331,10 @@ func (u *ui) Render() app.UI {
 					v := ctx.JSSrc().Get("value").String()
 					u.edit(func(n *note.Note) { n.Title = v })
 				}),
-			app.Div().ID("view").Title("Double-click to edit").Hidden(u.editing).
+			app.Div().ID("view").Title("Double-click to edit").Hidden(u.editing || drawing).
 				OnClick(u.check).OnDblClick(u.startEdit).Body(app.Raw(u.rendered(body))),
 			app.Textarea().ID("body").Placeholder("Write Markdown…").MaxLength(100000).Aria("label", "Note").
-				Hidden(!u.editing).
+				Hidden(!u.editing || drawing).
 				OnInput(func(ctx app.Context, _ app.Event) {
 					v := ctx.JSSrc().Get("value").String()
 					u.edit(func(n *note.Note) { n.Body = v })
@@ -345,6 +361,8 @@ func (u *ui) Render() app.UI {
 					ctx.JSSrc().Set("value", "") // the same file can be picked again
 				}),
 			u.renderAssetView(),
+			// Excalidraw owns the content; go-app leaves it alone as it has none.
+			app.Div().ID("canvas").Hidden(!drawing),
 		),
 		app.Div().Class("snackbar").Hidden(u.status == "" && !u.update).Body(
 			app.Span().Text(u.status),
@@ -442,7 +460,10 @@ func (u *ui) renderNote(n note.Note) app.UI {
 	}
 	return app.Li().Class(row).Body(
 		app.Button().Class("note").Body(
-			app.Span().Class("note-title").Text(n.Label()),
+			app.Span().Class("note-title").Body(
+				app.If(n.Kind == note.Drawing, func() app.UI { return icon("draw") }),
+				app.Span().Text(n.Label()),
+			),
 			app.Span().Class("note-meta").Text(n.Updated.Local().Format("Jan 2, 15:04")),
 		).OnClick(func(app.Context, app.Event) { u.open(n.ID) }, app.EventScope(n.ID)),
 		iconButton("edit", "Rename").OnClick(func(app.Context, app.Event) { u.rename(n.ID) }, app.EventScope(n.ID)),
@@ -819,9 +840,15 @@ func (u *ui) find(id string) *note.Note {
 // open shows note id, or closes the open note if id does not exist. Another
 // note opens in view mode.
 func (u *ui) open(id string) {
+	u.show(id, "")
+}
+
+// show opens note id like open; from is the note that the back gesture
+// returns to, if any.
+func (u *ui) show(id, from string) {
 	n := u.find(id)
 	if n == nil {
-		id, n = "", &note.Note{}
+		id, n, from = "", &note.Note{}, ""
 	}
 	if id != u.current {
 		u.editing = false
@@ -829,7 +856,7 @@ func (u *ui) open(id string) {
 	if id != "" {
 		u.asset = ""
 	}
-	u.current = id
+	u.current, u.from = id, from
 	u.syncBack()
 	app.Window().GetElementByID("title").Set("value", n.Title)
 	app.Window().GetElementByID("body").Set("value", n.Body)
@@ -838,12 +865,16 @@ func (u *ui) open(id string) {
 // backStateKey marks history entries pushed by syncBack with their depth.
 const backStateKey = "notelyBack"
 
-// syncBack keeps one history entry per in-app back step (an open note, edit
-// mode), so the back gesture steps back instead of leaving the app. Entries
-// are only pushed on user actions; Chrome skips entries pushed without one.
+// syncBack keeps one history entry per in-app back step (an open note, a
+// drawing opened from it, edit mode), so the back gesture steps back instead
+// of leaving the app. Entries are only pushed on user actions; Chrome skips
+// entries pushed without one.
 func (u *ui) syncBack() {
 	want := 0
 	if u.current != "" || u.asset != "" {
+		want++
+	}
+	if u.from != "" {
 		want++
 	}
 	if u.editing {
@@ -859,8 +890,8 @@ func (u *ui) syncBack() {
 	}
 }
 
-// back handles the back gesture: edit mode goes to view mode, an open note
-// closes.
+// back handles the back gesture: edit mode goes to view mode, a drawing goes
+// back to the note it was opened from, an open note closes.
 func (u *ui) back(ctx app.Context) {
 	if u.skipPop > 0 {
 		u.skipPop--
@@ -875,13 +906,19 @@ func (u *ui) back(ctx app.Context) {
 		u.setEditing(ctx, false)
 	case u.asset != "":
 		u.openAsset("")
+	case u.from != "":
+		u.open(u.from)
 	default:
 		u.open("")
 	}
 }
 
-// setEditing switches the open note between view and edit mode.
+// setEditing switches the open note between view and edit mode. Drawings
+// have no source to edit.
 func (u *ui) setEditing(ctx app.Context, on bool) {
+	if cur := u.find(u.current); on && (cur == nil || cur.Kind == note.Drawing) {
+		return
+	}
 	u.editing = on
 	u.syncBack()
 	if on {
@@ -1081,8 +1118,13 @@ func (u *ui) startEdit(ctx app.Context, e app.Event) {
 	}
 }
 
-// check toggles the task whose checkbox was clicked in view mode.
+// check toggles the task whose checkbox was clicked in view mode, or opens
+// the drawing whose embed was clicked.
 func (u *ui) check(_ app.Context, e app.Event) {
+	if embed := e.Get("target").Call("closest", ".drawing"); !embed.IsNull() {
+		u.openEmbed(embed)
+		return
+	}
 	attr := e.Get("target").Call("getAttribute", "data-task")
 	cur := u.find(u.current)
 	if attr.IsNull() || cur == nil {
@@ -1102,36 +1144,47 @@ func (u *ui) check(_ app.Context, e app.Event) {
 	app.Window().GetElementByID("body").Set("value", body)
 }
 
-// create adds a note titled title to space and opens it in edit mode.
-func (u *ui) create(space, title string) {
-	n := note.Note{ID: rand.Text(), Space: space, Title: title, Updated: time.Now()}
+// create adds a note of kind titled title to space and opens it, a Markdown
+// note in edit mode.
+func (u *ui) create(space, title, kind string) {
+	n := note.Note{ID: rand.Text(), Kind: kind, Space: space, Title: title, Updated: time.Now()}
 	u.notes = append(u.notes, n)
 	u.expand(space)
 	u.changed(n.ID)
 	u.open(n.ID)
-	u.editing = true
-	u.syncBack()
+	if kind != note.Drawing {
+		u.editing = true
+		u.syncBack()
+	}
 	focus := "body"
-	if title == "" {
+	switch {
+	case title == "":
 		focus = "title"
+	case kind == note.Drawing:
+		return // Excalidraw takes the focus
 	}
 	u.ctx.Defer(func(app.Context) { app.Window().GetElementByID(focus).Call("focus") })
 }
 
-// createNew asks for a path and creates a note, or with a trailing "/" a space
-// with a first note; a space exists as long as it has notes. The path starts
-// in space.
+// createNew asks for a path and creates a note, a drawing if it ends in
+// .excalidraw, or with a trailing "/" a space with a first note; a space exists
+// as long as it has notes. The path starts in space.
 func (u *ui) createNew(space string) {
 	value := ""
 	if space != "" {
 		value = space + "/"
 	}
 	u.ask(prompt{
-		title: "New", text: "Type a note name, or end with / for a space: Ideas, Work/, Work/Ideas.", ok: "Create",
+		title: "New", text: "Type a note name, or end with / for a space: Ideas, Work/, Work/Ideas. " +
+			"End with .excalidraw for a drawing.", ok: "Create",
 		input: true, list: true,
 		run: func(path string) {
 			if space, title, ok := note.ParsePath(path); ok {
-				u.create(space, title)
+				kind := ""
+				if isDrawingRef(title) {
+					kind, title = note.Drawing, strings.TrimSpace(title[:len(title)-len(drawingExt)])
+				}
+				u.create(space, title, kind)
 			}
 		},
 	}, value)

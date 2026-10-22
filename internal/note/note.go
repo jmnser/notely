@@ -7,9 +7,14 @@ import (
 	"time"
 )
 
-// Note is a single note: a Markdown file in a space.
+// Drawing is the Kind of an Excalidraw drawing.
+const Drawing = "excalidraw"
+
+// Note is a single note in a space: Markdown, or with Kind Drawing an
+// Excalidraw drawing whose Body is the scene as JSON.
 type Note struct {
 	ID      string    `json:"id"`
+	Kind    string    `json:"kind,omitempty"`
 	Space   string    `json:"space,omitempty"`
 	Title   string    `json:"title"`
 	Body    string    `json:"body"`
