@@ -37,18 +37,24 @@ const menu = h(MainMenu, null,
   h(MainMenu.DefaultItems.ChangeCanvasBackground));
 
 // mount shows an editor for json in el. onChange gets the scene's JSON once
-// changes pause. It returns update, to show a scene changed elsewhere, and
-// unmount, which saves pending changes first.
+// changes pause. It returns update, to show a scene changed elsewhere unless
+// changes are pending (they win, as with notes), flush, which returns pending
+// changes at once, and unmount, which saves pending changes first.
 function mount(el, json, dark, onChange) {
   const root = createRoot(el);
   const data = parse(json);
   let api, sent = json, base = null, timer = 0;
-  const save = () => {
+  // flush returns the pending changes' JSON, or null if there are none.
+  const flush = () => {
+    if (!timer || !api) return null;
     clearTimeout(timer);
     timer = 0;
-    if (!api) return;
     sent = serializeAsJSON(api.getSceneElementsIncludingDeleted(), api.getAppState(), api.getFiles(), "local");
-    onChange(sent);
+    return sent;
+  };
+  const save = () => {
+    const json = flush();
+    if (json !== null) onChange(json);
   };
   const render = (dark) => root.render(h(Excalidraw, {
     initialData: { elements: data.elements, appState: data.appState, files: data.files, scrollToContent: true },
@@ -74,8 +80,9 @@ function mount(el, json, dark, onChange) {
   render(dark);
   return {
     theme: render,
+    flush,
     update(json) {
-      if (json === sent || !api) return;
+      if (json === sent || !api || timer) return;
       const d = parse(json);
       sent = json;
       base = null;
@@ -89,7 +96,7 @@ function mount(el, json, dark, onChange) {
       });
     },
     unmount() {
-      if (timer) save();
+      save();
       root.unmount();
     },
   };

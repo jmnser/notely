@@ -57,10 +57,11 @@ func (u *ui) loadExcalidraw() bool {
 	}))
 	script.Call("addEventListener", "error", app.FuncOf(func(app.Value, []app.Value) any {
 		u.ctx.Dispatch(func(app.Context) {
-			u.excalidraw = 0 // retried on the next render, e.g. once back online
 			script.Call("remove")
 			style.Call("remove")
 		})
+		// Retried later, e.g. once back online; at once would loop while offline.
+		u.ctx.After(retry, func(app.Context) { u.excalidraw = 0 })
 		return nil
 	}))
 	doc.Get("head").Call("appendChild", style)
@@ -103,6 +104,18 @@ func (u *ui) canvas() {
 	u.editor = e
 }
 
+// flushEditor applies the editor's pending changes at once, e.g. before the
+// page is hidden, when a dispatched change would come too late.
+func (u *ui) flushEditor() {
+	if u.editor == nil {
+		return
+	}
+	if body := u.editor.handle.Call("flush"); body.Truthy() {
+		u.editor.body = body.String()
+		u.editNote(u.editor.id, func(n *note.Note) { n.Body = u.editor.body })
+	}
+}
+
 // closeEditor removes the editor; it saves pending changes first.
 func (u *ui) closeEditor() {
 	if u.editor == nil {
@@ -121,13 +134,14 @@ func (u *ui) drawings() {
 	if cur == nil || embeds.Length() == 0 {
 		return
 	}
+	isDark := dark()
 	for i := range embeds.Length() {
 		el := embeds.Index(i)
 		space, title := drawingPath(el.Get("dataset").Get("drawing").String(), cur.Space)
 		d := findDrawing(u.notes, space, title)
 		key := "missing"
 		if d != nil {
-			key = d.ID + "@" + strconv.FormatInt(d.Updated.UnixNano(), 36) + "@" + strconv.FormatBool(dark())
+			key = d.ID + "@" + strconv.FormatInt(d.Updated.UnixNano(), 36) + "@" + strconv.FormatBool(isDark)
 		}
 		if el.Get("dataset").Get("key").String() == key {
 			continue
@@ -143,7 +157,7 @@ func (u *ui) drawings() {
 		}
 		el.Get("dataset").Set("key", key)
 		el.Set("title", "Open drawing")
-		app.Window().Get("notelyExcalidraw").Call("embed", el, d.Body, dark())
+		app.Window().Get("notelyExcalidraw").Call("embed", el, d.Body, isDark)
 	}
 }
 

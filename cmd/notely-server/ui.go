@@ -152,7 +152,11 @@ func (u *ui) OnMount(ctx app.Context) {
 	// handler, not Dispatch, which would run too late. Wasm runs one
 	// goroutine at a time.
 	flush := app.FuncOf(func(app.Value, []app.Value) any {
-		if app.Window().Get("document").Get("visibilityState").String() == "hidden" && u.seq != u.saved {
+		if app.Window().Get("document").Get("visibilityState").String() != "hidden" {
+			return nil
+		}
+		u.flushEditor()
+		if u.seq != u.saved {
 			u.persist()
 		}
 		return nil
@@ -553,7 +557,7 @@ func (u *ui) diagrams() {
 		script.Call("addEventListener", "load", app.FuncOf(func(app.Value, []app.Value) any {
 			u.ctx.Dispatch(func(app.Context) {
 				theme := "default"
-				if app.Window().Call("matchMedia", "(prefers-color-scheme: dark)").Get("matches").Bool() {
+				if dark() {
 					theme = "dark"
 				}
 				app.Window().Get("mermaid").Call("initialize", map[string]any{
@@ -858,8 +862,12 @@ func (u *ui) show(id, from string) {
 	}
 	u.current, u.from = id, from
 	u.syncBack()
+	body := n.Body
+	if n.Kind == note.Drawing { // shown in Excalidraw, not the editor
+		body = ""
+	}
 	app.Window().GetElementByID("title").Set("value", n.Title)
-	app.Window().GetElementByID("body").Set("value", n.Body)
+	app.Window().GetElementByID("body").Set("value", body)
 }
 
 // backStateKey marks history entries pushed by syncBack with their depth.
@@ -1181,7 +1189,7 @@ func (u *ui) createNew(space string) {
 		run: func(path string) {
 			if space, title, ok := note.ParsePath(path); ok {
 				kind := ""
-				if isDrawingRef(title) {
+				if strings.HasSuffix(strings.ToLower(title), drawingExt) { // titles may contain ":"
 					kind, title = note.Drawing, strings.TrimSpace(title[:len(title)-len(drawingExt)])
 				}
 				u.create(space, title, kind)
@@ -1432,7 +1440,7 @@ func (u *ui) sync(app.Context) {
 				u.loadAssets(nil)
 			}
 			if _, ok := u.dirty[u.current]; !ok {
-				u.open(u.current) // show changes made elsewhere
+				u.show(u.current, u.from) // show changes made elsewhere
 			}
 			u.persist()
 			if u.again {
