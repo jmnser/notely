@@ -51,47 +51,9 @@ docker run -d --name notely --stop-timeout 70 -p 8000:8000 -v notely:/data notel
 
 Releases push it for `linux/amd64` and `linux/arm64` to `docker.io/<DOCKERHUB_USERNAME>/notely`, tagged with the version (tags are immutable, so there is no `latest`). The release workflow needs the repository variable `DOCKERHUB_USERNAME` and the secret `DOCKERHUB_TOKEN`, a Docker Hub access token with read and write access. Every push to a pull request from this repository also pushes a dev image, tagged `<latest release tag in the branch>-dev-<short commit hash>` such as `v0.14.0-dev-1a2b3c4`, to try the change before merging. Dev tags are not cleaned up; prune them on Docker Hub.
 
-## Upgrading to v0.5.0
-
-The server binary is now `notely-server`, also in the image (`/notely-server`); `notely` is the terminal client, which was `notely-tui`. Flags, image name and data are unchanged, so Quadlet units keep working. Replace `notely` with `notely-server` in your own scripts, and reinstall the client from `cmd/notely`: its state moves on first start.
-
-## Upgrading from notely-api and notely-web
-
-Since v0.2.0 one `notely` binary and image replace both. Stop and remove the `notely-api` and `notely-web` units and `notely.network`, then set up `notely.container` below with the same data directory; its layout is unchanged. The `-api` flag is gone and `/healthz` moved to port 8000.
-
-## Podman, systemd and Tailscale Funnel
-
-Run Notely as a rootless Quadlet service at `https://<host>.<tailnet>.ts.net/notely`. Replace `<user>` with the Docker Hub user, then:
-
-```sh
-mkdir -p /data/notely ~/.config/containers/systemd
-cat > ~/.config/containers/systemd/notely.container <<'UNIT'
-[Container]
-ContainerName=notely
-Image=docker.io/<user>/notely:<latest release tag>
-UserNS=keep-id:uid=65532,gid=65532
-Volume=/data/notely:/data
-PublishPort=127.0.0.1:8000:8000
-Exec=-addr=:8000 -data=/data -base=/notely
-# Time for the last git backup on stop, which may take a minute.
-StopTimeout=70
-
-[Service]
-Restart=always
-
-[Install]
-WantedBy=default.target
-UNIT
-systemctl --user daemon-reload
-systemctl --user start notely
-tailscale funnel --bg --set-path=/notely http://127.0.0.1:8000/notely
-```
-
-`UserNS=keep-id:uid=65532,gid=65532` maps your user to the image's user, so `/data/notely` stays yours. `-base=/notely` serves the app under that path. Check with `tailscale funnel status` and `journalctl --user -u notely`. To update, change the tag in `Image=`, then run `systemctl --user daemon-reload && systemctl --user restart notely`.
-
 ## Sign-on
 
-On first start `notely-server` creates `<data>/.users.json` with the user `joe` and a random password, which it logs once (`journalctl --user -u notely` or `docker logs notely`). Change it, and add users, there, then restart, with hashes from the command below. Each user's notes, images and backup state live in `<data>/users/<user>/`; notes from before v0.13.0 move there on start.
+On first start `notely-server` creates `<data>/.users.json` with the user `joe` and a random password, which it logs once (`docker logs notely`). Change it, and add users, there, then restart, with hashes from the command below. Each user's notes, images and backup state live in `<data>/users/<user>/`; notes from before v0.13.0 move there on start.
 
 ```sh
 echo -n 'new password' | notely-server -hash
