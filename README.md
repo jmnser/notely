@@ -1,13 +1,25 @@
 # Notely
 
-Offline-first Markdown notes, organised in spaces. See [design.md](design.md).
+Self-hosted, offline-first Markdown notes, organised in spaces. A web app you can install on your phone, a terminal client, and a single Go server that keeps every note as a plain Markdown file.
 
-`notely-server` serves the [go-app](https://go-app.dev) PWA and its JSON API, storing notes as Markdown files.
+- Markdown with task lists, Mermaid diagrams and images
+- Excalidraw drawings, on their own or embedded in notes
+- Spaces and sub-spaces, pinning and search
+- Works offline; changes sync when the server is reachable
+- Multiple users, with spaces shared between them
+- Per-user backup to a git repository
+- Terminal client for reading and editing in `$EDITOR`
+
+## Quick start
 
 ```sh
-task run   # http://localhost:8000
-task test lint
+docker run -d --name notely --stop-timeout 70 -p 8000:8000 -v notely:/data docker.io/jonas27/notely:<version>
+docker logs notely   # prints the password of the first user, joe
 ```
+
+Open http://localhost:8000. Image tags are the [release versions](https://github.com/jmnser/notely/releases); there is no `latest`. The image is distroless, runs as UID 65532, listens on 8000 and stores notes in `/data`. Serve it over HTTPS beyond localhost, e.g. behind a reverse proxy.
+
+## Server
 
 | Flag             | Default              |                                                       |
 | ---------------- | -------------------- | ----------------------------------------------------- |
@@ -18,48 +30,17 @@ task test lint
 | `-base`          |                      | path prefix to serve under, e.g. `/notely`            |
 | `-hash`          |                      | print the argon2id hash of a password read from stdin |
 
-## Terminal client
+The stop timeout of 70 s gives the last git backup time to finish.
 
-`notely` reads and edits the notes of a `notely-server` in the terminal. It keeps a copy and syncs changes when the server is reachable.
+## Users
 
-```sh
-go install github.com/jmnser/notely/cmd/notely@latest
-notely -init -server https://<host>/notely -user joe
-secret-tool store --label=Notely service notely user joe   # as -init prints; macOS: security add-generic-password …
-notely
-```
-
-`-init` writes `~/.config/notely/config.toml` (`$NOTELY_CONFIG` overrides it). `notely` signs in with its `password_command`, which reads the password from the system keychain, and asks for it if that fails. `-server` and `$NOTELY_SERVER` override `server.url`.
-
-```toml
-[server]
-url = "https://<host>/notely"
-user = "joe"
-password_command = "secret-tool lookup service notely user joe"
-```
-
-Notes are listed in their spaces; `enter`, `←` and `→` fold spaces. Notes open rendered; `e` edits one in `$VISUAL` or `$EDITOR`, `/` searches, `?` lists all keys. Plain HTTP only works for localhost. `-logout` signs out and removes the notes from the device; it refuses while changes are not synced, unless `-force`. `-version` prints the version.
-
-## Container image
-
-`task image` builds `notely-server` on distroless (`static-debian13:nonroot`), tagged with `VERSION` (default `v0.0.0-<commit>`). It runs as UID 65532 and listens on 8000 with notes in `/data`.
-
-```sh
-task image VERSION=v1.2.3
-docker run -d --name notely --stop-timeout 70 -p 8000:8000 -v notely:/data notely:v1.2.3
-```
-
-Releases push it for `linux/amd64` and `linux/arm64` to `docker.io/<DOCKERHUB_USERNAME>/notely`, tagged with the version (tags are immutable, so there is no `latest`). The release workflow needs the repository variable `DOCKERHUB_USERNAME` and the secret `DOCKERHUB_TOKEN`, a Docker Hub access token with read and write access. Every push to a pull request from this repository also pushes a dev image, tagged `<latest release tag in the branch>-dev-<short commit hash>` such as `v0.14.0-dev-1a2b3c4`, to try the change before merging. Dev tags are not cleaned up; prune them on Docker Hub.
-
-## Sign-on
-
-On first start `notely-server` creates `<data>/.users.json` with the user `joe` and a random password, which it logs once (`docker logs notely`). Change it, and add users, there, then restart, with hashes from the command below. Each user's notes, images and backup state live in `<data>/users/<user>/`; notes from before v0.13.0 move there on start.
+On first start the server creates `<data>/.users.json` with the user `joe` and a random password, which it logs once. Edit the file to change passwords and add users, then restart. Hash passwords with:
 
 ```sh
 echo -n 'new password' | notely-server -hash
 ```
 
-To share a space, list it for each member; the user's value becomes an object:
+Each user's notes live in `<data>/users/<user>/`. To share a top-level space, list it for each member:
 
 ```json
 {
@@ -68,18 +49,50 @@ To share a space, list it for each member; the user's value becomes an object:
 }
 ```
 
-Members see and edit its notes, stored in `<data>/shared/Family/`, and their sub-spaces such as `Family/Trips`; the app marks it and offers no rename. Moving a note into the space shares it; moving it out makes it the mover's. Notes a member had in a space of that name before stay private, also when moved within it. A shared space is one space name: no `/`, not `Notes`, no leading dot, and spelt the same for all members. Servers before v0.14.0 cannot read a users file with objects.
+Members see and edit its notes and sub-spaces, stored in `<data>/shared/Family/`. Moving a note into the space shares it; moving it out makes it the mover's. A shared space name has no `/`, is not `Notes`, does not start with a dot and is spelt the same for all members.
 
-Serve over HTTPS beyond localhost; see [design.md](design.md#sign-on).
+## Images and drawings
 
-## Images
+In edit mode, the image button or pasting an image uploads it and inserts `![name](<hash>.png)`. Images (PNG, JPEG, GIF, WebP, up to 2 MiB) are stored next to the note. The gallery button lists a space's images to insert them again. Unused images are deleted weekly once they are a week old.
 
-In edit mode, the image button or pasting an image uploads it and inserts `![name](<hash>.png)`. Images (PNG, JPEG, GIF, WebP, up to 2 MiB) live next to the note's Markdown file in its space, `<data>/users/<user>/<space>/`, also in the git backup. The gallery button lists a space's images with their names to insert them again. Unreferenced images are deleted every Sunday at 23:00 server time once a week old.
-
-## Drawings
-
-Type `Flow.excalidraw` in the New dialog to create an Excalidraw drawing, stored as `<data>/<space>/Flow.excalidraw`, or embed it in a note with `![](Flow.excalidraw)`; clicking the embed opens it, or creates it if missing. The Excalidraw bundle in `cmd/notely-server/web/excalidraw` is built with `task excalidraw` (needs Node.js), see [design.md](design.md#drawings-1).
+Type `Flow.excalidraw` in the New dialog to create a drawing, or embed one in a note with `![](Flow.excalidraw)`; clicking the embed opens it, or creates it if missing. `![](Work/Flow.excalidraw)` refers to a drawing in another space.
 
 ## Git backup
 
-Each user can push the notes to their own repository every `-sync-interval` (default 1h): open **Git backup** at the bottom of the sidebar and enter the repository URL, branch and a token. For GitHub, create a fine-grained token for that repository only with _Contents: read and write_. Shared spaces go to `shared/<space>/` in each member's repository, so every member's backup holds them. The token is stored in `<data>/users/<user>/.sync/token` on the server, never in git. Repositories on loopback, link-local or Tailscale addresses are refused; LAN addresses work. See [design.md](design.md#git-backup).
+Each user can push their notes to their own repository: open **Git backup** at the bottom of the sidebar and enter the repository URL, branch and a token. For GitHub, use a fine-grained token for that repository only with _Contents: read and write_. Shared spaces go to `shared/<space>/` in each member's repository. The token stays on the server, never in git. Repositories on loopback, link-local or Tailscale addresses are refused.
+
+## Terminal client
+
+`notely` reads and edits the notes of a server in the terminal. It keeps a local copy and syncs when the server is reachable.
+
+```sh
+go install github.com/jmnser/notely/cmd/notely@latest
+notely -init -server https://<host>/notely -user joe
+notely
+```
+
+`-init` writes `~/.config/notely/config.toml` (`$NOTELY_CONFIG` overrides it) and prints how to store the password in the system keychain, which `password_command` reads it from:
+
+```toml
+[server]
+url = "https://<host>/notely"
+user = "joe"
+password_command = "secret-tool lookup service notely user joe"
+```
+
+`enter`, `←` and `→` fold spaces, `e` edits a note in `$VISUAL` or `$EDITOR`, `/` searches and `?` lists all keys. `-logout` signs out and removes the local copy; it refuses while changes are not synced, unless `-force`. Drawings are listed but only open in the web app.
+
+## Development
+
+Needs Go and [Task](https://taskfile.dev).
+
+```sh
+task run          # http://localhost:8000
+task test lint
+task image VERSION=v1.2.3
+task excalidraw   # rebuild the Excalidraw bundle, needs Node.js
+```
+
+[design.md](design.md) describes the architecture, storage format and limitations.
+
+Releases are tagged on every merge to `main` and push multi-arch images to `docker.io/<DOCKERHUB_USERNAME>/notely`; the workflow needs the repository variable `DOCKERHUB_USERNAME` and the secret `DOCKERHUB_TOKEN`. Each push to a pull request also pushes a dev image tagged `<release>-dev-<commit>`.
