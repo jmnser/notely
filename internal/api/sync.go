@@ -105,8 +105,8 @@ type syncStatus struct {
 // syncer pushes each user's notes to their git repository: one-way, the
 // app's notes replace the branch content in a new commit. The notes are in
 // <dir>/<user>; next to them, in .sync, it keeps settings.json, token (mode
-// 0600) and repo, a clone the notes are mirrored into; only the notes' .md
-// files and images are committed, those of the user's shared spaces in
+// 0600) and repo, a clone the notes are mirrored into; only the notes' files
+// (.md, .excalidraw) and images are committed, those of the user's shared spaces in
 // shared/<space>.
 type syncer struct {
 	dir    string                       // per-user directories
@@ -432,7 +432,7 @@ func copyFile(from, to *os.Root, rel, out string) error {
 // mirrorSource is a directory mirrored to prefix.
 type mirrorSource struct{ dir, prefix string }
 
-// mirror makes dst hold exactly the .md files and images of srcs. Dot entries
+// mirror makes dst hold exactly the note files (.md, .excalidraw) and images of srcs. Dot entries
 // and symbolic links are skipped; os.Root keeps all access inside the trees.
 func mirror(dst string, srcs ...mirrorSource) error {
 	to, err := os.OpenRoot(dst)
@@ -491,7 +491,7 @@ func mirrorFrom(src mirrorSource, to *os.Root, files map[string]bool) error {
 			return nil
 		case !d.Type().IsRegular():
 			return nil
-		case path.Ext(rel) != noteExt && !imageName.MatchString(d.Name()):
+		case !noteFile(rel) && !imageName.MatchString(d.Name()):
 			return nil
 		}
 		out := path.Join(src.prefix, rel)

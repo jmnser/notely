@@ -16,9 +16,9 @@ func TestMigrate(t *testing.T) {
 		ID: "a", Title: "Plan", Space: "work", Updated: time.Now().UTC(),
 		Body: "![x](/images/" + img + ") [full](/images/" + img + ") https://host/api/images/" + img,
 	}
-	writeNote(t, dir, "work/Plan.md", string(encode(n)))
-	writeNote(t, dir, "Inbox.md", string(encode(note.Note{ID: "b", Title: "Inbox", Updated: n.Updated})))
-	writeNote(t, dir, "users/List.md", string(encode(note.Note{ID: "c", Title: "List", Space: "users", Updated: n.Updated})))
+	writeNote(t, dir, "work/Plan.md", string(encodeMarkdown(n)))
+	writeNote(t, dir, "Inbox.md", string(encodeMarkdown(note.Note{ID: "b", Title: "Inbox", Updated: n.Updated})))
+	writeNote(t, dir, "users/List.md", string(encodeMarkdown(note.Note{ID: "c", Title: "List", Space: "users", Updated: n.Updated})))
 	writeNote(t, dir, "users.json", "{}") // a -users file in the data directory
 	writeNote(t, dir, ".images/"+img, "png")
 	writeNote(t, dir, ".images/"+stray, "png")
@@ -44,7 +44,7 @@ func TestMigrate(t *testing.T) {
 		}
 	}
 	data, _ := os.ReadFile(filepath.Join(dir, "users/bob/work/Plan.md"))
-	got, err := decode(data)
+	got, err := decode(data, noteExt)
 	if want := "![x](" + img + ") [full](" + img + ") https://host/api/images/" + img; err != nil ||
 		got.Body != want || got.Title != "Plan" {
 		t.Errorf("migrated note = %+v, %v, want body %q", got, err, want)
@@ -62,7 +62,7 @@ func TestMigrate(t *testing.T) {
 
 func TestMigrateInterrupted(t *testing.T) {
 	dir := t.TempDir()
-	writeNote(t, dir, "work/Plan.md", string(encode(note.Note{ID: "a", Title: "Plan", Space: "work"})))
+	writeNote(t, dir, "work/Plan.md", string(encodeMarkdown(note.Note{ID: "a", Title: "Plan", Space: "work"})))
 	writeNote(t, dir, ".layout", "migrating")
 	writeNote(t, dir, "users/ann/work/Plan.md", "partial copy, kept")
 	if err := migrate(dir, map[string]argonHash{"ann": {}}); err != nil {

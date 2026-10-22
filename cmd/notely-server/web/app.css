@@ -292,6 +292,12 @@ button {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.note-title .icon {
+  width: 16px;
+  height: 16px;
+  margin-right: 6px;
+  vertical-align: -3px;
+}
 .note-row.current .note-title {
   color: inherit;
 }
@@ -507,6 +513,15 @@ main {
   line-height: 22px;
   resize: none;
 }
+/* Excalidraw sizes itself to its container. */
+#canvas {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  margin: 8px 16px 16px;
+  overflow: hidden;
+  border-radius: 16px;
+}
 
 /* Rendered Markdown */
 .markdown:empty::before {
@@ -605,6 +620,28 @@ main {
 .markdown img {
   max-width: 100%;
   border-radius: 12px;
+}
+.markdown .drawing {
+  display: inline-block;
+  max-width: 100%;
+  min-height: 48px;
+  padding: 12px 16px;
+  border: 1px dashed var(--md-outline-variant);
+  border-radius: 12px;
+  background: none;
+  color: var(--md-on-surface-variant);
+  font: inherit;
+  vertical-align: top;
+  cursor: pointer;
+}
+.markdown .drawing:has(svg) {
+  padding: 0;
+  border-style: solid;
+}
+.markdown .drawing svg {
+  display: block;
+  max-width: 100%;
+  height: auto;
 }
 
 /* Sign-in */
@@ -884,7 +921,8 @@ dialog p {
   #view {
     padding: 8px 16px 96px;
   }
-  #body {
+  #body,
+  #canvas {
     width: calc(100% - 16px);
     margin: 8px;
   }

@@ -12,6 +12,13 @@ tasks:
     env: {GOOS: js, GOARCH: wasm}
     cmd: go build -trimpath -ldflags "-s -w" -o cmd/notely-server/web/app.wasm ./cmd/notely-server
 
+  excalidraw:
+    desc: Bundle Excalidraw into cmd/notely-server/web/excalidraw (needs Node.js)
+    dir: tools/excalidraw
+    cmds:
+      - npm ci --ignore-scripts
+      - node build.js
+
   build:
     desc: Build bin/notely-server and bin/notely
     deps: [wasm]

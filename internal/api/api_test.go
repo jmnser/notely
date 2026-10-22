@@ -98,6 +98,9 @@ func TestAPIRejects(t *testing.T) {
 		{"long space", "/api/notes/a", `{"space":"` + strings.Repeat("é", maxSpace+1) + `"}`, nil, http.StatusBadRequest},
 		{"newline in title", "/api/notes/a", `{"title":"a\nb"}`, nil, http.StatusBadRequest},
 		{"tab in space", "/api/notes/a", `{"space":"a\tb"}`, nil, http.StatusBadRequest},
+		{"bad kind", "/api/notes/a", `{"kind":"pdf"}`, nil, http.StatusBadRequest},
+		{"drawing not a scene", "/api/notes/a", `{"kind":"excalidraw","body":"[1]"}`, nil, http.StatusBadRequest},
+		{"large drawing", "/api/notes/a", `{"kind":"excalidraw","body":"{\"x\":\"` + strings.Repeat("x", maxDrawing) + `\"}"}`, nil, http.StatusBadRequest},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -115,6 +118,12 @@ func TestAPIRejects(t *testing.T) {
 	if w := request(t, h, http.MethodPut, "/api/notes/b", `{"space":" Work // Plans /"}`); w.Code != http.StatusOK ||
 		!strings.Contains(w.Body.String(), `"space":"Work/Plans"`) {
 		t.Errorf("space is not cleaned: %d %s", w.Code, w.Body)
+	}
+	if w := request(t, h, http.MethodPut, "/api/notes/d", `{"kind":"excalidraw","body":"`+strings.Repeat("x", maxText)+`"}`); w.Code != http.StatusBadRequest {
+		t.Errorf("drawing not JSON: %d", w.Code)
+	}
+	if w := request(t, h, http.MethodPut, "/api/notes/d", `{"kind":"excalidraw","body":"{\"elements\":[]}"}`); w.Code != http.StatusOK {
+		t.Errorf("drawing: %d", w.Code)
 	}
 	if w := request(t, h, http.MethodDelete, "/api/notes/a.b", ""); w.Code != http.StatusBadRequest {
 		t.Errorf("delete bad id: %d", w.Code)

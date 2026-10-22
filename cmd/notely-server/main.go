@@ -18,6 +18,7 @@ import (
 	"maps"
 	"net/http"
 	"os"
+	"path"
 	"strconv"
 	"strings"
 	"time"
@@ -80,7 +81,7 @@ func main() {
 		// in both schemes; themeColorScript follows the scheme elsewhere.
 		ThemeColor:         barColor,
 		BackgroundColor:    "#f3edf7",
-		CacheableResources: []string{"/web/mermaid/mermaid.min.js"}, // loaded on demand, kept for offline use
+		CacheableResources: onDemand(),
 		Icon: app.Icon{
 			Default:  "/web/icon-192.png",
 			Large:    "/web/icon-512.png",
@@ -100,6 +101,22 @@ func main() {
 	<-synced // pushes the last changes
 }
 
+// onDemand lists the files loaded on demand, Mermaid and Excalidraw, so that
+// the service worker keeps them for offline use.
+func onDemand() []string {
+	files := []string{"/web/mermaid/mermaid.min.js"}
+	err := fs.WalkDir(web, "web/excalidraw", func(name string, d fs.DirEntry, err error) error {
+		if err == nil && !d.IsDir() && path.Base(name) != "LICENSE" {
+			files = append(files, "/"+name)
+		}
+		return err
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+	return files
+}
+
 // routes serves the API, the embedded files and the PWA under base. /healthz
 // also answers without base, for probes that bypass the proxy in front. The
 // API guards itself against cross-origin requests.
@@ -116,13 +133,20 @@ func routes(base string, backend, pwa http.Handler) http.Handler {
 }
 
 // securityHeaders forbids framing, MIME sniffing and images from other sites
-// and keeps paths out of the Referer sent to other sites.
+// and keeps paths out of the Referer sent to other sites. Pages fetch, load
+// fonts and frame from this origin only; Excalidraw would otherwise fall back
+// to a CDN for fonts. The service worker is exempt from connect-src: it
+// fetches what pages request.
 func securityHeaders(h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		hdr := w.Header()
 		// Images only from here: notes cannot make readers' browsers request
 		// other sites, which could track when a note is read.
-		hdr.Set("Content-Security-Policy", "frame-ancestors 'none'; img-src 'self' data: blob:")
+		csp := "frame-ancestors 'none'; img-src 'self' data: blob:"
+		if !strings.HasSuffix(r.URL.Path, "/app-worker.js") {
+			csp += "; connect-src 'self'; font-src 'self' data:; frame-src 'none'"
+		}
+		hdr.Set("Content-Security-Policy", csp)
 		hdr.Set("X-Frame-Options", "DENY")
 		hdr.Set("X-Content-Type-Options", "nosniff")
 		hdr.Set("Referrer-Policy", "same-origin")

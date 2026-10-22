@@ -58,9 +58,13 @@ func rows(spaces []*note.Space, collapsed map[string]bool, searching bool) []lis
 }
 
 // matches reports whether n contains every word of query in its title, space
-// or body, ignoring case.
+// or body, ignoring case. A drawing's body is not text, so it is left out.
 func matches(n note.Note, query string) bool {
-	text := strings.ToLower(n.Label() + "\n" + n.Space + "\n" + n.Body)
+	text := n.Label() + "\n" + n.Space
+	if n.Kind != note.Drawing {
+		text += "\n" + n.Body
+	}
+	text = strings.ToLower(text)
 	return !slices.ContainsFunc(strings.Fields(strings.ToLower(query)), func(w string) bool {
 		return !strings.Contains(text, w)
 	})
@@ -89,9 +93,13 @@ func (d delegate) Render(w io.Writer, m list.Model, index int, item list.Item) {
 		}
 		text, meta = icon+" "+lipgloss.NewStyle().Bold(true).Render(r.space.Name), strconv.Itoa(r.space.Count)
 	} else {
-		text, meta = "  "+r.note.Label(), r.note.Updated.Local().Format("2006-01-02")
+		label := r.note.Label()
+		if r.note.Kind == note.Drawing {
+			label = "✎ " + label
+		}
+		text, meta = "  "+label, r.note.Updated.Local().Format("2006-01-02")
 		if r.note.Pinned {
-			text = "  📌 " + r.note.Label()
+			text = "  📌 " + label
 		}
 	}
 	line := strings.Repeat("  ", r.depth) + text

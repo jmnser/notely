@@ -2,6 +2,8 @@ package main
 
 import (
 	"bytes"
+	"html"
+	"net/url"
 	"regexp"
 	"slices"
 	"strconv"
@@ -11,11 +13,21 @@ import (
 	"github.com/yuin/goldmark/ast"
 	"github.com/yuin/goldmark/extension"
 	extast "github.com/yuin/goldmark/extension/ast"
+	"github.com/yuin/goldmark/parser"
+	"github.com/yuin/goldmark/renderer"
 	"github.com/yuin/goldmark/text"
+	"github.com/yuin/goldmark/util"
+
+	"github.com/jmnser/notely/internal/note"
 )
 
 // md renders GitHub Flavored Markdown. Raw HTML in notes is not rendered.
-var md = goldmark.New(goldmark.WithExtensions(extension.GFM))
+// Images of drawings become embeds, see drawings.
+var md = goldmark.New(
+	goldmark.WithExtensions(extension.GFM),
+	goldmark.WithParserOptions(parser.WithASTTransformers(util.Prioritized(drawings{}, 1000))),
+	goldmark.WithRendererOptions(renderer.WithNodeRenderers(util.Prioritized(drawings{}, 500))),
+)
 
 // imageLink finds links to a note's images: by name, relative to the note, or
 // as /images/<name>, as notes referenced them before images moved next to them.
@@ -38,18 +50,18 @@ func render(src, prefix, id string) string {
 	}
 	var out strings.Builder
 	out.WriteString(`<div class="markdown">`)
-	html := imageLink.ReplaceAllStringFunc(buf.String(), func(link string) string {
+	page := imageLink.ReplaceAllStringFunc(buf.String(), func(link string) string {
 		m := imageLink.FindStringSubmatch(link)
-		url := imageBase(prefix, id) + m[3]
+		ref := imageBase(prefix, id) + m[3]
 		if m[2] != "" {
-			url = prefix + "/api/images/" + m[3] // found in any of the user's directories
+			ref = prefix + "/api/images/" + m[3] // found in any of the user's directories
 		}
 		if m[1] == "img src" {
-			return `<img loading="lazy" title="` + m[3] + `" src="` + url + `"`
+			return `<img loading="lazy" title="` + m[3] + `" src="` + ref + `"`
 		}
-		return `<a href="` + url + `"`
+		return `<a href="` + ref + `"`
 	})
-	rest := mermaidBlocks(html)
+	rest := mermaidBlocks(page)
 	for i := 0; ; i++ {
 		before, after, ok := strings.Cut(rest, checkbox)
 		out.WriteString(before)
@@ -238,18 +250,96 @@ func imageBase(prefix, id string) string {
 	return prefix + "/api/notes/" + id + "/images/"
 }
 
-// mermaidBlocks marks fenced mermaid code blocks in html for Mermaid. Their
+// mermaidBlocks marks fenced mermaid code blocks in page for Mermaid. Their
 // content stays HTML-escaped; Mermaid reads it as text.
-func mermaidBlocks(html string) string {
+func mermaidBlocks(page string) string {
 	var out strings.Builder
 	for {
-		before, after, ok := strings.Cut(html, mermaidStart)
+		before, after, ok := strings.Cut(page, mermaidStart)
 		out.WriteString(before)
 		if !ok {
 			return out.String()
 		}
 		code, rest, _ := strings.Cut(after, mermaidEnd)
 		out.WriteString(`<pre class="mermaid">` + code + `</pre>`)
-		html = rest
+		page = rest
 	}
+}
+
+// drawingExt ends references to drawings, as their files.
+const drawingExt = ".excalidraw"
+
+var kindDrawing = ast.NewNodeKind("Drawing")
+
+// drawingNode embeds the drawing at ref, a link destination.
+type drawingNode struct {
+	ast.BaseInline
+	ref string
+}
+
+func (n *drawingNode) Kind() ast.NodeKind { return kindDrawing }
+
+func (n *drawingNode) Dump(src []byte, level int) {
+	ast.DumpHelper(n, src, level, map[string]string{"Ref": n.ref}, nil)
+}
+
+// drawings turns images of drawings, ![](Flow.excalidraw), into buttons that
+// the app fills with the drawing; data-drawing holds the reference.
+type drawings struct{}
+
+func (drawings) Transform(doc *ast.Document, _ text.Reader, _ parser.Context) {
+	var images []*ast.Image
+	_ = ast.Walk(doc, func(n ast.Node, entering bool) (ast.WalkStatus, error) {
+		if img, ok := n.(*ast.Image); ok && entering && isDrawingRef(string(img.Destination)) {
+			images = append(images, img)
+		}
+		return ast.WalkContinue, nil
+	})
+	for _, img := range images {
+		img.Parent().ReplaceChild(img.Parent(), img, &drawingNode{ref: string(img.Destination)})
+	}
+}
+
+func (drawings) RegisterFuncs(r renderer.NodeRendererFuncRegisterer) {
+	r.Register(kindDrawing, func(w util.BufWriter, _ []byte, n ast.Node, entering bool) (ast.WalkStatus, error) {
+		if entering {
+			ref := n.(*drawingNode).ref
+			_, title := drawingPath(ref, "")
+			_, _ = w.WriteString(`<button type="button" class="drawing" data-drawing="` + html.EscapeString(ref) + `">` +
+				html.EscapeString(title) + `</button>`)
+		}
+		return ast.WalkSkipChildren, nil
+	})
+}
+
+// isDrawingRef reports whether a link destination names a drawing in the app,
+// not on the web.
+func isDrawingRef(dest string) bool {
+	return strings.HasSuffix(strings.ToLower(dest), drawingExt) && !strings.Contains(dest, ":")
+}
+
+// drawingPath resolves a drawing reference made in a note in space: Flow is
+// the drawing Flow in the same space, Work/Flow the one in Work and /Flow the
+// one in the default space, each ending in .excalidraw.
+func drawingPath(ref, space string) (string, string) {
+	if p, err := url.PathUnescape(ref); err == nil {
+		ref = p
+	}
+	ref = ref[:len(ref)-min(len(ref), len(drawingExt))]
+	if strings.Contains(ref, "/") {
+		space, title, _ := note.ParsePath(ref)
+		return space, title
+	}
+	return space, strings.TrimSpace(ref)
+}
+
+// findDrawing returns the drawing titled title in space, compared
+// case-insensitively, or nil.
+func findDrawing(notes []note.Note, space, title string) *note.Note {
+	for i, n := range notes {
+		if n.Kind == note.Drawing && n.Space == space && strings.EqualFold(strings.TrimSpace(n.Title), title) {
+			return &notes[i]
+		}
+	}
+	return nil
 }

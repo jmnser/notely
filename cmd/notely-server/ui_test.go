@@ -69,3 +69,11 @@ func TestWithPendingDeleted(t *testing.T) {
 		t.Errorf("merged another user's cache: %+v", got)
 	}
 }
+
+func TestWithoutSyncedDrawings(t *testing.T) {
+	c := cache{Notes: []note.Note{{ID: "a"}, {ID: "d", Kind: note.Drawing}, {ID: "e", Kind: note.Drawing}}, Dirty: []string{"e"}}
+	got := withoutSyncedDrawings(c)
+	if len(got.Notes) != 2 || got.Notes[0].ID != "a" || got.Notes[1].ID != "e" || len(c.Notes) != 3 {
+		t.Errorf("withoutSyncedDrawings() = %+v, input %+v", got.Notes, c.Notes)
+	}
+}

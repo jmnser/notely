@@ -17,7 +17,7 @@ browser (PWA, wasm) ──► notely-server ──► notes/*.md
 Imported only by files built with `!wasm`, so none of it reaches the browser; CI fails if the wasm imports it or grows beyond 11 MB.
 
 
-- API: `GET /api/notes`, `PUT /api/notes/{id}` (create or replace), `DELETE /api/notes/{id}`, `GET`/`POST /api/notes/{id}/images`, `GET /api/notes/{id}/images/{name}`, `GET /api/events` (change events), `GET /healthz` (also outside `-base`); sign-on: `POST /api/login`, `POST /api/logout`, `GET /api/session`.
+- API: `GET /api/notes`, `PUT /api/notes/{id}` (create or replace; `kind: "excalidraw"` for a drawing), `DELETE /api/notes/{id}`, `GET`/`POST /api/notes/{id}/images`, `GET /api/notes/{id}/images/{name}`, `GET /api/events` (change events), `GET /healthz` (also outside `-base`); sign-on: `POST /api/login`, `POST /api/logout`, `GET /api/session`.
 - Both writes are idempotent, so the frontend can safely retry them.
 - Each user has a directory, `<data>/users/<user>/`, with all their files: notes in their space directories, images next to them and the git backup state in `.sync/`. A signed-on user only reaches their own and their shared spaces'; requests name no user. Notes live in memory; each one is also a Markdown file, written atomically and durably (temp file, fsync, rename, fsync of the directory) on every change. A failed write leaves the note unchanged.
 - Shared spaces, listed per user in the users file, are top-level spaces with their own directory, `<data>/shared/<space>/`; the space name is left out of paths below it. A user sees their own notes and those of their shared spaces. A note's space picks its store: one whose top space is a shared space of the user goes there, spelt as configured, any other to the user's own, and a note of the user's own keeps its store while its top space stays, so notes a user had in a space before it was shared stay private. Moving a note between stores copies its images along and makes references of the former layout relative; changes and image uploads run one at a time across users, as they may touch several stores. A note in several stores, e.g. recreated by an offline device after a move, shows its newest copy; saving or deleting it acts on all copies. Change events go to all users who see the note. `GET /api/me` returns the user and their shared spaces; the app marks them and offers no rename, which would move every note out of the space for all members.
@@ -73,6 +73,10 @@ updated: 2026-10-15T09:12:00.123Z
 - On start, files and directories starting with `.` (e.g. `.git`) are ignored and files without a valid `id` are skipped with a log line, so the directory can be a git repository. Of two files with the same `id`, left by a crash while moving a note, the older is removed, so deleting the note does not bring it back.
 - The server stamps `updated`; concurrent edits resolve as last write wins.
 
+### Drawings
+
+A note with `kind: "excalidraw"` is an Excalidraw drawing; its body is the scene as JSON (at most 2 MiB, a JSON object). It is stored next to the notes as `<title>.excalidraw`, a regular Excalidraw file indented for readable diffs, with the note's fields under the key `notely` instead of front matter; Excalidraw ignores the key, so the file opens there too. Names follow the rules above, per extension, and the git backup includes the files.
+
 ### Images
 
 - `POST /api/notes/{id}/images` stores a PNG, JPEG, GIF or WebP image of up to 2 MiB next to note `id`, in its space directory, as `<hash>.<ext>`, named after the first 128 bits of its SHA-256, and answers `{"name": "<name>"}`. The type comes from the content, not the request; SVG is refused because it can carry scripts. An image is stored once per directory. Larger images stored under the former 10 MiB limit are still served.
@@ -96,7 +100,7 @@ One package built twice:
 - as WebAssembly it is the app that runs in the browser;
 - as a native binary it embeds that wasm and CSS, serves the PWA shell and the API. Browser and API therefore share one origin, so no CORS is needed.
 
-Size: the wasm calls the backend with the browser's `fetch`, not `net/http`, which keeps Go's TLS and HTTP client stack out of it (10 MB instead of 15 MB). `notely-server` serves the embedded `.wasm`, `.js`, `.css` and `.svg` files gzip-compressed (2.6 MB for the wasm, 1 MB for Mermaid), compressing each once on first request, and tells go-app the uncompressed wasm size for its loading progress.
+Size: the wasm calls the backend with the browser's `fetch`, not `net/http`, which keeps Go's TLS and HTTP client stack out of it (10 MB instead of 15 MB). `notely-server` serves the embedded `.wasm`, `.js`, `.css` and `.svg` files gzip-compressed (2.6 MB for the wasm, 1 MB for Mermaid, 1.2 MB for Excalidraw and 0.5 MB for its fonts), compressing each once on first request, and tells go-app the uncompressed wasm size for its loading progress.
 
 The app is local first:
 
@@ -139,6 +143,12 @@ Fenced `mermaid` code blocks render as diagrams. The renderer turns them into `<
 
 Rendering stays in the browser so the Go build keeps no cgo or headless browser dependency.
 
+### Drawings
+
+Drawings show in the main pane in Excalidraw's editor, without view and edit mode; changes are saved once they pause for 300 ms, like any edit. Create one by ending a name with `.excalidraw` in the New dialog, e.g. `Work/Flow.excalidraw`, or from a note: `![](Flow.excalidraw)` embeds the drawing Flow of the note's space as SVG, `![](Work/Flow.excalidraw)` the one in Work and `![](/Flow.excalidraw)` the one without a space. Clicking an embed opens the drawing, the back gesture returns to the note; an embed of a missing drawing creates it. Search matches drawings by title only.
+
+Excalidraw (MIT, 0.18.1) with React is bundled by `tools/excalidraw` (esbuild, `task excalidraw`) into `web/excalidraw/`, embedded and loaded on the first drawing like Mermaid, and cached for offline use. `tools/excalidraw/index.js` is the bridge the wasm calls (`mount`, `embed`). The bundle leaves out the translations (Notely is in English), Mermaid to Excalidraw (it would bundle Mermaid again), the CJK font Xiaolai (13 MB; CJK text uses a system font) and the CDN that Excalidraw falls back to for fonts. The editor has no image tool, embeds or AI features; the page's Content Security Policy keeps fetches, fonts and frames on the origin.
+
 ## Terminal client: `cmd/notely`
 
 A [Bubble Tea](https://github.com/charmbracelet/bubbletea) v2 client for the same API, local first like the web app and sharing its merge (`note.Merge`).
@@ -161,6 +171,7 @@ A [Bubble Tea](https://github.com/charmbracelet/bubbletea) v2 client for the sam
 
 - Spaces with subspaces holding notes; create, rename, collapse, pin, move notes between them
 - Collapsible sidebar on large screens
+- Excalidraw drawings, stored as `.excalidraw` files and embeddable in notes
 - Notes render as Markdown with Mermaid diagrams; double-click to edit the source; check task list items in view mode; checked items sink to the bottom
 - Lists continue on Enter while editing
 - Create notes and spaces by typing a path; edit (autosave), pin, rename, delete and full-text search notes
@@ -182,6 +193,7 @@ Material Design 3 is implemented in plain CSS (`web/app.css`: M3 color, type, sh
 - Only whole top-level spaces can be shared, not single notes.
 - An image uploaded to a note is stored twice: next to the note and in Assets. Assets need the backend and do not show offline.
 - Images need the backend: uploading needs a connection, and images not yet loaded do not show offline. An image used in several spaces is stored in each. Images are stored as uploaded, including metadata such as a photo's GPS location, and go into the git backup.
+- Drawings are saved whole: concurrent edits on two devices keep the last one, not both. Drawings have no image tool; pasted images count towards their 2 MiB. The app refuses to save a drawing over that size. When the browser storage is full, synced drawings are left out of it and do not show offline. The terminal client lists drawings but only the web app shows and edits them.
 - Sessions and the last git backup results are lost on backend restart.
 - Git backup is one-way; edits made in the repository are not imported.
 - `notely` runs once per server and user account at a time.

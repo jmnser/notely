@@ -114,6 +114,10 @@ Serve over HTTPS beyond localhost; see [design.md](design.md#sign-on).
 
 In edit mode, the image button or pasting an image uploads it and inserts `![name](<hash>.png)`. Images (PNG, JPEG, GIF, WebP, up to 2 MiB) live next to the note's Markdown file in its space, `<data>/users/<user>/<space>/`, also in the git backup. The gallery button lists a space's images with their names to insert them again. Unreferenced images are deleted every Sunday at 23:00 server time once a week old.
 
+## Drawings
+
+Type `Flow.excalidraw` in the New dialog to create an Excalidraw drawing, stored as `<data>/<space>/Flow.excalidraw`, or embed it in a note with `![](Flow.excalidraw)`; clicking the embed opens it, or creates it if missing. The Excalidraw bundle in `cmd/notely-server/web/excalidraw` is built with `task excalidraw` (needs Node.js), see [design.md](design.md#drawings-1).
+
 ## Git backup
 
 Each user can push the notes to their own repository every `-sync-interval` (default 1h): open **Git backup** at the bottom of the sidebar and enter the repository URL, branch and a token. For GitHub, create a fine-grained token for that repository only with _Contents: read and write_. Shared spaces go to `shared/<space>/` in each member's repository, so every member's backup holds them. The token is stored in `<data>/users/<user>/.sync/token` on the server, never in git. Repositories on loopback, link-local or Tailscale addresses are refused; LAN addresses work. See [design.md](design.md#git-backup).

@@ -64,6 +64,8 @@ func TestSync(t *testing.T) {
 	}
 	writeNote(t, notes, "Inbox.md", "a")
 	writeNote(t, notes, "work/Plan.md", "b")
+	writeNote(t, notes, "work/Flow.excalidraw", "{}")
+	writeNote(t, notes, "work/notes.txt", "foreign")
 	writeNote(t, notes, ".users.json", "secret")
 	writeNote(t, notes, "work/0123456789abcdef0123456789abcdef.png", "png")
 	writeNote(t, notes, "work/.0123456789abcdef0123456789abcdef.png.ABC.tmp", "partial")
@@ -91,7 +93,7 @@ func TestSync(t *testing.T) {
 	if st := sync(); st.Commit == "" {
 		t.Error("first sync pushed nothing")
 	}
-	if files, n := remoteFiles(t, remote); !slices.Equal(files, []string{"Inbox.md", "work/0123456789abcdef0123456789abcdef.png", "work/Plan.md"}) || n != 1 {
+	if files, n := remoteFiles(t, remote); !slices.Equal(files, []string{"Inbox.md", "work/0123456789abcdef0123456789abcdef.png", "work/Flow.excalidraw", "work/Plan.md"}) || n != 1 {
 		t.Errorf("remote = %v, %d commits", files, n)
 	}
 	if st := sync(); st.Commit != "" {
@@ -99,8 +101,10 @@ func TestSync(t *testing.T) {
 	}
 
 	writeNote(t, notes, "work/Plan.md", "b2")
-	if err := os.Remove(filepath.Join(notes, "Inbox.md")); err != nil {
-		t.Fatal(err)
+	for _, f := range []string{"Inbox.md", "work/Flow.excalidraw"} {
+		if err := os.Remove(filepath.Join(notes, f)); err != nil {
+			t.Fatal(err)
+		}
 	}
 	sync()
 	if files, n := remoteFiles(t, remote); !slices.Equal(files, []string{"work/0123456789abcdef0123456789abcdef.png", "work/Plan.md"}) || n != 2 {

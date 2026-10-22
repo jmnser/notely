@@ -13,6 +13,9 @@ func (n Note) Label() string {
 	if t := strings.TrimSpace(n.Title); t != "" {
 		return t
 	}
+	if n.Kind == Drawing {
+		return "Untitled drawing"
+	}
 	if l, _, _ := strings.Cut(strings.TrimSpace(n.Body), "\n"); l != "" {
 		return l
 	}

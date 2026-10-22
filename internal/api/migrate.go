@@ -57,7 +57,7 @@ func migrate(dir string, users map[string]argonHash) error {
 		case name == oldUsersSpace:
 			notes = append(notes, name)
 		case name == usersDir || strings.HasPrefix(name, "."):
-		case e.IsDir() || e.Type().IsRegular() && filepath.Ext(name) == noteExt:
+		case e.IsDir() || e.Type().IsRegular() && noteFile(name):
 			notes = append(notes, name)
 		}
 	}
@@ -146,7 +146,7 @@ func copyTree(from, to string) error {
 			return nil
 		case d.IsDir():
 			return os.MkdirAll(out, 0o700)
-		case !d.Type().IsRegular() || filepath.Ext(p) != noteExt && !imageName.MatchString(d.Name()):
+		case !d.Type().IsRegular() || !noteFile(p) && !imageName.MatchString(d.Name()):
 			return nil
 		}
 		return copyMissing(p, out)
@@ -179,7 +179,7 @@ func migrateImages(from, home string) error {
 		if err != nil {
 			return err
 		}
-		n, err := decode(data)
+		n, err := decode(data, noteExt)
 		if err != nil || !oldImageRef.MatchString(n.Body) {
 			return nil //nolint:nilerr // not a note: left as it is
 		}
@@ -189,7 +189,7 @@ func migrateImages(from, home string) error {
 			}
 		}
 		n.Body = oldImageRef.ReplaceAllString(n.Body, "$1$2")
-		return atomicfile.WriteFile(p, encode(n))
+		return atomicfile.WriteFile(p, encodeMarkdown(n))
 	})
 	if err != nil {
 		return err
