@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"html"
 	"net/url"
-	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -29,10 +28,6 @@ var md = goldmark.New(
 	goldmark.WithRendererOptions(renderer.WithNodeRenderers(util.Prioritized(drawings{}, 500))),
 )
 
-// imageLink finds links to a note's images: by name, relative to the note, or
-// as /images/<name>, as notes referenced them before images moved next to them.
-var imageLink = regexp.MustCompile(`<(img src|a href)="(/images/)?([0-9a-f]{32}\.(?:png|jpg|gif|webp))"`)
-
 const (
 	checkbox     = ` disabled="" type="checkbox"`
 	mermaidStart = `<pre><code class="language-mermaid">`
@@ -42,25 +37,37 @@ const (
 // render converts markdown to HTML with a single root element. Task list
 // checkboxes are enabled and numbered in data-task, in document order.
 // Mermaid code blocks become <pre class="mermaid"> for Mermaid to draw.
-// Images of note id load from the API under prefix.
-func render(src, prefix, id string) string {
+// Images, referenced from a note of space, load from the API under prefix;
+// versions maps their paths to their versions, so the browser caches them.
+func render(src, prefix, space string, versions map[string]string) string {
+	doc := md.Parser().Parse(text.NewReader([]byte(src)))
+	_ = ast.Walk(doc, func(n ast.Node, entering bool) (ast.WalkStatus, error) {
+		if !entering {
+			return ast.WalkContinue, nil
+		}
+		switch l := n.(type) {
+		case *ast.Image:
+			if img, ok := imageOf(string(l.Destination), space); ok {
+				l.Destination = []byte(imageURL(prefix, img, versions[img.Path()]))
+				l.SetAttributeString("loading", "lazy")
+				if len(l.Title) == 0 {
+					l.Title = []byte(img.Name)
+				}
+			}
+		case *ast.Link:
+			if img, ok := imageOf(string(l.Destination), space); ok {
+				l.Destination = []byte(imageURL(prefix, img, versions[img.Path()]))
+			}
+		}
+		return ast.WalkContinue, nil
+	})
 	var buf bytes.Buffer
-	if err := md.Convert([]byte(src), &buf); err != nil {
+	if err := md.Renderer().Render(&buf, []byte(src), doc); err != nil {
 		return "<div></div>"
 	}
 	var out strings.Builder
 	out.WriteString(`<div class="markdown">`)
-	page := imageLink.ReplaceAllStringFunc(buf.String(), func(link string) string {
-		m := imageLink.FindStringSubmatch(link)
-		ref := imageBase(prefix, id) + m[3]
-		if m[2] != "" {
-			ref = prefix + "/api/images/" + m[3] // found in any of the user's directories
-		}
-		if m[1] == "img src" {
-			return `<img loading="lazy" title="` + m[3] + `" src="` + ref + `"`
-		}
-		return `<a href="` + ref + `"`
-	})
+	page := buf.String()
 	rest := mermaidBlocks(page)
 	for i := 0; ; i++ {
 		before, after, ok := strings.Cut(rest, checkbox)
@@ -244,10 +251,27 @@ func indentOf(s string) int {
 	return len(s) - len(strings.TrimLeft(s, " \t>"))
 }
 
-// imageBase is the URL path the images next to note id are served under,
-// below prefix.
-func imageBase(prefix, id string) string {
-	return prefix + "/api/notes/" + id + "/images/"
+// imageOf resolves a link destination of a note in space to an image.
+func imageOf(dest, space string) (note.Image, bool) {
+	s, name, ok := note.ParseImageRef(dest, space)
+	return note.Image{Space: s, Name: name}, ok
+}
+
+// imageURL is the URL of img below prefix, cached by the browser if version
+// is not empty.
+func imageURL(prefix string, img note.Image, version string) string {
+	var p strings.Builder
+	p.WriteString(prefix + "/api/images/")
+	if img.Space != "" {
+		for seg := range strings.SplitSeq(img.Space, "/") {
+			p.WriteString(url.PathEscape(seg) + "/")
+		}
+	}
+	p.WriteString(img.Name)
+	if version != "" {
+		p.WriteString("?v=" + url.QueryEscape(version))
+	}
+	return p.String()
 }
 
 // mermaidBlocks marks fenced mermaid code blocks in page for Mermaid. Their

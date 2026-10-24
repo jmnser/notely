@@ -31,6 +31,7 @@ import (
 	githttp "github.com/go-git/go-git/v5/plumbing/transport/http"
 
 	"github.com/jmnser/notely/internal/atomicfile"
+	"github.com/jmnser/notely/internal/note"
 )
 
 // syncTimeout bounds one user's sync, so a remote that stops answering cannot
@@ -411,11 +412,6 @@ func openRepo(dir, remote string) (*git.Repository, error) {
 
 // copyFile copies rel of from to out in to, unless to holds it already.
 func copyFile(from, to *os.Root, rel, out string) error {
-	if imageName.MatchString(path.Base(rel)) {
-		if _, err := to.Stat(out); err == nil {
-			return nil // an image's name is its content
-		}
-	}
 	data, err := from.ReadFile(rel)
 	if err != nil {
 		return err
@@ -491,7 +487,7 @@ func mirrorFrom(src mirrorSource, to *os.Root, files map[string]bool) error {
 			return nil
 		case !d.Type().IsRegular():
 			return nil
-		case !noteFile(rel) && !imageName.MatchString(d.Name()):
+		case !noteFile(rel) && !note.ImageName.MatchString(d.Name()):
 			return nil
 		}
 		out := path.Join(src.prefix, rel)

@@ -186,12 +186,6 @@ button {
   flex: 1;
   overflow-y: auto;
 }
-/* Material 3 divider between the note spaces and Assets */
-.tree .divider {
-  height: 1px;
-  margin: 8px 16px;
-  background: var(--md-outline-variant);
-}
 .space {
   display: flex;
   align-items: center;
@@ -847,18 +841,18 @@ dialog p {
   color: var(--md-error);
 }
 
-/* Assets space: uploaded images, shown instead of a note */
-.app:not(.asset-open) .asset-view,
-.app.asset-open main > :not(.asset-view) {
+/* An image of a space, shown instead of a note */
+.app:not(.image-open) .image-view,
+.app.image-open main > :not(.image-view) {
   display: none !important;
 }
-.asset-view {
+.image-view {
   display: flex;
   flex: 1;
   flex-direction: column;
   min-height: 0;
 }
-.asset-name {
+.image-name {
   margin: 0;
   padding: 8px 32px;
   color: var(--md-on-surface);
@@ -867,13 +861,21 @@ dialog p {
   line-height: 24px;
   overflow-wrap: anywhere;
 }
-.asset-image {
+.image-ref {
+  margin: 0;
+  padding: 0 32px 8px;
+  color: var(--md-on-surface-variant);
+  font-size: 14px;
+  line-height: 20px;
+  overflow-wrap: anywhere;
+}
+.image-image {
   flex: 1;
   min-height: 0;
   overflow: auto;
   padding: 8px 32px 32px;
 }
-.asset-image img {
+.image-image img {
   max-width: 100%;
   height: auto;
   border-radius: 12px;
@@ -912,10 +914,11 @@ dialog p {
     padding: 0 12px;
   }
   #title,
-  .asset-name {
+  .image-name,
+  .image-ref {
     padding: 8px 16px;
   }
-  .asset-image {
+  .image-image {
     padding: 8px 16px 96px;
   }
   #view {

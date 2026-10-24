@@ -1,7 +1,6 @@
 package api
 
 import (
-	"crypto/sha256"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -28,15 +27,14 @@ type store struct {
 	dir   string
 	space string // a shared space's name: its notes' top space, left out of their paths
 	notes map[string]note.Note
-	paths map[string]string            // id → file path relative to dir
-	sums  map[string][sha256.Size]byte // asset version → SHA-256, see assetSum
+	paths map[string]string // id → file path relative to dir
 }
 
 func openStore(dir string) (*store, error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, err
 	}
-	s := &store{dir: dir, notes: map[string]note.Note{}, paths: map[string]string{}, sums: map[string][sha256.Size]byte{}}
+	s := &store{dir: dir, notes: map[string]note.Note{}, paths: map[string]string{}}
 	var stale []string // older files of a note, left by a crash while moving it
 	err := filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
 		switch {
@@ -115,7 +113,12 @@ func (s *store) put(n note.Note) (note.Note, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	old, exists := s.paths[n.ID]
+	was := s.notes[n.ID].Space
 	rel := s.pathFor(n, old)
+	moved := exists && old != rel && !s.sameFile(old, rel)
+	if moved && n.Kind != note.Drawing {
+		n.Body = s.carryImages(n.ID, n.Body, n.Space, filepath.Join(s.dir, filepath.Dir(old)), filepath.Dir(rel), was, s)
+	}
 	data, err := encode(n)
 	if err != nil {
 		return note.Note{}, err
@@ -123,11 +126,11 @@ func (s *store) put(n note.Note) (note.Note, error) {
 	if err := s.write(rel, data); err != nil {
 		return note.Note{}, err
 	}
-	if exists && old != rel && !s.sameFile(old, rel) {
-		s.copyImages(filepath.Join(s.dir, filepath.Dir(old)), n.Body, filepath.Dir(rel))
+	if moved {
 		if err := s.remove(old); err != nil {
 			log.Print(err)
 		}
+		s.markDir(filepath.Dir(old), was) // for the images left, if it has no more notes
 	}
 	s.notes[n.ID] = n
 	s.paths[n.ID] = rel
@@ -144,6 +147,7 @@ func (s *store) delete(id string) error {
 	if err := s.remove(rel); err != nil {
 		return err
 	}
+	s.markDir(filepath.Dir(rel), s.notes[id].Space)
 	delete(s.notes, id)
 	delete(s.paths, id)
 	return nil
@@ -230,9 +234,7 @@ func (s *store) remove(rel string) error {
 	if err := os.Remove(path); err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return err
 	}
-	if dir := filepath.Dir(path); dir != filepath.Clean(s.dir) {
-		_ = os.Remove(dir) // fails while not empty
-	}
+	s.removeDir(filepath.Dir(rel))
 	return nil
 }
 

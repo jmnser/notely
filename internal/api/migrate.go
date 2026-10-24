@@ -146,7 +146,7 @@ func copyTree(from, to string) error {
 			return nil
 		case d.IsDir():
 			return os.MkdirAll(out, 0o700)
-		case !d.Type().IsRegular() || !noteFile(p) && !imageName.MatchString(d.Name()):
+		case !d.Type().IsRegular() || !noteFile(p) && !hashName.MatchString(d.Name()):
 			return nil
 		}
 		return copyMissing(p, out)
@@ -158,7 +158,7 @@ var oldImageRef = regexp.MustCompile(`(?m)(^|[(<\s"'])/images/([0-9a-f]{32}\.(?:
 
 // migrateImages copies the images in from next to the notes in home that
 // reference them as /images/<name>, makes those references relative and
-// copies the other images to home, where the weekly cleanup deletes them.
+// copies the other images to home, the default space.
 func migrateImages(from, home string) error {
 	if _, err := os.Stat(from); errors.Is(err, fs.ErrNotExist) {
 		return nil
@@ -199,7 +199,7 @@ func migrateImages(from, home string) error {
 		return err
 	}
 	for _, e := range entries {
-		if e.Type().IsRegular() && imageName.MatchString(e.Name()) {
+		if e.Type().IsRegular() && hashName.MatchString(e.Name()) {
 			if err := copyMissing(filepath.Join(from, e.Name()), filepath.Join(home, e.Name())); err != nil {
 				return err
 			}

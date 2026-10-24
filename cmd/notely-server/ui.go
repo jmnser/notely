@@ -4,7 +4,6 @@ import (
 	"crypto/rand"
 	"errors"
 	"maps"
-	"path"
 	"slices"
 	"strconv"
 	"strings"
@@ -49,49 +48,48 @@ type prompt struct {
 type ui struct {
 	app.Compo
 
-	ctx          app.Context // mount context; outlives the elements that trigger events
-	mounted      bool
-	notes        []note.Note     // sorted
-	dirty        map[string]int  // note ID -> seq of its last change not yet pushed
-	deleted      []string        // note IDs whose deletion is not yet pushed
-	seq          int             // counts local changes
-	current      string          // ID of the open note
-	from         string          // ID of the note the open drawing was opened from
-	editing      bool            // the open note shows its Markdown source
-	collapsed    map[string]bool // space paths whose content is hidden
-	drawer       bool            // the sidebar is collapsed to a rail on large screens
-	pinned       map[string]bool // pinned space paths, kept on this device
-	dialog       prompt
-	html         string  // rendered htmlSrc
-	mermaid      int     // Mermaid loading state: 0 not loaded, 1 loading, 2 ready
-	excalidraw   int     // Excalidraw loading state, as mermaid
-	editor       *editor // shows the open drawing
-	htmlSrc      string  // note ID and source of html
-	query        string
-	status       string
-	signedOut    bool   // the backend asks for a sign-on
-	signingIn    bool   // a sign-on request is running
-	loginErr     string // why the last sign-on failed
-	backup       syncInfo
-	backupMsg    string   // git backup status shown in its dialog
-	images       []string // names of the images next to the open note, in their dialog
-	assets       []asset  // the Assets space, newest first
-	asset        string   // key of the open asset
-	uploadTo     string   // Assets subspace the asset file picker uploads to
-	assetsLoaded bool     // assets were requested since signing on
-	imagesMsg    string   // images dialog status
-	syncing      bool
-	again        bool // a sync was requested while one was running
-	retries      bool // a retry of a failed sync is scheduled
-	syncGen      int  // bumped on sign-out, so results of older syncs are dropped
-	saved        int  // seq when last persisted
-	update       bool // a new app version is available
-	backDepth    int  // history entries pushed for in-app back steps, see syncBack
-	skipPop      int  // popstate events caused by syncBack itself
-	events       *eventSource
-	shared       []string // the user's shared spaces, top-level spaces other users see too
-	user         string   // the signed-on user, or the last one
-	discard      string   // a user signing in again to discard another user's unsynced changes
+	ctx        app.Context // mount context; outlives the elements that trigger events
+	mounted    bool
+	notes      []note.Note     // sorted
+	dirty      map[string]int  // note ID -> seq of its last change not yet pushed
+	deleted    []string        // note IDs whose deletion is not yet pushed
+	seq        int             // counts local changes
+	current    string          // ID of the open note
+	from       string          // ID of the note the open drawing was opened from
+	editing    bool            // the open note shows its Markdown source
+	collapsed  map[string]bool // space paths whose content is hidden
+	drawer     bool            // the sidebar is collapsed to a rail on large screens
+	pinned     map[string]bool // pinned space paths, kept on this device
+	dialog     prompt
+	html       string  // rendered htmlSrc
+	mermaid    int     // Mermaid loading state: 0 not loaded, 1 loading, 2 ready
+	excalidraw int     // Excalidraw loading state, as mermaid
+	editor     *editor // shows the open drawing
+	htmlSrc    string  // note ID and source of html
+	query      string
+	status     string
+	signedOut  bool   // the backend asks for a sign-on
+	signingIn  bool   // a sign-on request is running
+	loginErr   string // why the last sign-on failed
+	backup     syncInfo
+	backupMsg  string       // git backup status shown in its dialog
+	images     []note.Image // the images of all spaces, newest first
+	imagesGen  int          // bumped when images load, so the open note renders again
+	image      string       // path of the open image
+	uploadTo   string       // space the image file picker uploads to
+	imagesMsg  string       // images dialog status
+	syncing    bool
+	again      bool // a sync was requested while one was running
+	retries    bool // a retry of a failed sync is scheduled
+	syncGen    int  // bumped on sign-out, so results of older syncs are dropped
+	saved      int  // seq when last persisted
+	update     bool // a new app version is available
+	backDepth  int  // history entries pushed for in-app back steps, see syncBack
+	skipPop    int  // popstate events caused by syncBack itself
+	events     *eventSource
+	shared     []string // the user's shared spaces, top-level spaces other users see too
+	user       string   // the signed-on user, or the last one
+	discard    string   // a user signing in again to discard another user's unsynced changes
 }
 
 // eventSource is an open stream of the backend's change events.
@@ -227,7 +225,14 @@ func (u *ui) Render() app.UI {
 		}
 		known[note.SpaceName(n.Space)] = true // offered as "Work/" for paths
 	}
-	spaces := note.Tree(shown, u.pinned)
+	var images []note.Image
+	for _, img := range u.images {
+		if strings.Contains(strings.ToLower(img.Space+"\n"+img.Name), query) {
+			images = append(images, img)
+		}
+		known[note.SpaceName(img.Space)] = true
+	}
+	spaces := note.Tree(shown, images, u.pinned)
 	all := slices.Sorted(maps.Keys(known)) // offered in the dialog
 
 	cur := u.find(u.current)
@@ -238,8 +243,8 @@ func (u *ui) Render() app.UI {
 		if !drawing {
 			body = cur.Body
 		}
-	} else if u.findAsset(u.asset) != nil {
-		class += " open asset-open"
+	} else if u.findImage(u.image) != nil {
+		class += " open image-open"
 	}
 	toggle, chevron := "Collapse sidebar", "chevron_left"
 	if u.drawer {
@@ -289,8 +294,6 @@ func (u *ui) Render() app.UI {
 				app.Range(spaces).Slice(func(i int) app.UI {
 					return u.renderSpace(spaces[i], query != "")
 				}),
-				app.If(len(spaces) > 0, func() app.UI { return app.Li().Class("divider").Attr("role", "separator") }),
-				u.renderAssets(query),
 			),
 			app.Div().Class("drawer-bottom").Body(
 				app.Button().Class("drawer-toggle").Title(toggle).Aria("label", toggle).Aria("expanded", !u.drawer).
@@ -323,7 +326,7 @@ func (u *ui) Render() app.UI {
 					iconButton("image", "Insert image").Hidden(!u.editing).OnClick(func(app.Context, app.Event) {
 						app.Window().GetElementByID("image-file").Call("click")
 					}),
-					iconButton("photo_library", "Images in this space").Hidden(!u.editing).OnClick(u.openImages),
+					iconButton("photo_library", "Images in this space").Hidden(!u.editing).OnClick(u.openGallery),
 					iconButton("move", "Move to space").OnClick(u.move),
 					pinButton("Pin", cur != nil && cur.Pinned).
 						OnClick(func(app.Context, app.Event) { u.togglePin(u.current) }),
@@ -364,7 +367,7 @@ func (u *ui) Render() app.UI {
 					u.insertImages(ctx.JSSrc().Get("files"))
 					ctx.JSSrc().Set("value", "") // the same file can be picked again
 				}),
-			u.renderAssetView(),
+			u.renderImageView(),
 			// Excalidraw owns the content; go-app leaves it alone as it has none.
 			app.Div().ID("canvas").Hidden(!drawing),
 		),
@@ -387,7 +390,7 @@ func (u *ui) Render() app.UI {
 			),
 		),
 		u.renderBackup(),
-		u.renderImages(),
+		u.renderGallery(),
 		app.Dialog().ID("dialog").Body(
 			app.Form().OnSubmit(u.submit).Body(
 				app.H2().Text(u.dialog.title),
@@ -432,6 +435,9 @@ func (u *ui) renderSpace(s *note.Space, searching bool) app.UI {
 			iconButton("add", "New note or subspace").OnClick(func(app.Context, app.Event) {
 				u.createNew(s.Path)
 			}, app.EventScope(s.Path)),
+			iconButton("image", "Upload images").OnClick(func(app.Context, app.Event) {
+				u.pickImages(s.Path)
+			}, app.EventScope(s.Path)),
 			// Renaming would move all notes out of the shared space, for everyone.
 			app.If(!shared, func() app.UI {
 				return iconButton("edit", "Rename space").OnClick(func(app.Context, app.Event) {
@@ -450,6 +456,9 @@ func (u *ui) renderSpace(s *note.Space, searching bool) app.UI {
 				}),
 				app.Range(s.Notes).Slice(func(i int) app.UI {
 					return u.renderNote(s.Notes[i])
+				}),
+				app.Range(s.Images).Slice(func(i int) app.UI {
+					return u.renderImage(s.Images[i])
 				}),
 			)
 		}),
@@ -779,10 +788,9 @@ func (u *ui) signIn(ctx app.Context, e app.Event) {
 			default:
 				if u.user != "" && u.user != user { // another user's notes
 					u.notes, u.dirty, u.deleted = nil, map[string]int{}, nil
-					u.assets, u.asset = nil, ""
+					u.images, u.image = nil, ""
 					u.open("")
 				}
-				u.assetsLoaded = false
 				u.user, u.discard = user, ""
 				u.signedOut = false
 				ctx.LocalStorage().Del(signedOutKey)
@@ -809,7 +817,7 @@ func (u *ui) signOut(app.Context, app.Event) {
 				}
 			})
 			u.notes, u.dirty, u.deleted = nil, map[string]int{}, nil
-			u.assets, u.asset, u.assetsLoaded = nil, "", false
+			u.images, u.image = nil, ""
 			u.syncGen++
 			u.syncing, u.again = false, false
 			u.ctx.LocalStorage().Del(storageKey)
@@ -826,8 +834,13 @@ func (u *ui) signOut(app.Context, app.Event) {
 // rendered returns src of the open note as HTML, rendering it only when it
 // or the note changed.
 func (u *ui) rendered(src string) string {
-	if key := u.current + "\n" + src; u.html == "" || key != u.htmlSrc {
-		u.html, u.htmlSrc = render(src, rootPrefix(), u.current), key
+	space := ""
+	if cur := u.find(u.current); cur != nil {
+		space = cur.Space
+	}
+	key := u.current + "\n" + space + "\n" + strconv.Itoa(u.imagesGen) + "\n" + src
+	if u.html == "" || key != u.htmlSrc {
+		u.html, u.htmlSrc = render(src, rootPrefix(), space, u.versions()), key
 	}
 	return u.html
 }
@@ -858,7 +871,7 @@ func (u *ui) show(id, from string) {
 		u.editing = false
 	}
 	if id != "" {
-		u.asset = ""
+		u.image = ""
 	}
 	u.current, u.from = id, from
 	u.syncBack()
@@ -879,7 +892,7 @@ const backStateKey = "notelyBack"
 // entries pushed without one.
 func (u *ui) syncBack() {
 	want := 0
-	if u.current != "" || u.asset != "" {
+	if u.current != "" || u.image != "" {
 		want++
 	}
 	if u.from != "" {
@@ -912,8 +925,8 @@ func (u *ui) back(ctx app.Context) {
 	switch {
 	case u.editing:
 		u.setEditing(ctx, false)
-	case u.asset != "":
-		u.openAsset("")
+	case u.image != "":
+		u.openImage("")
 	case u.from != "":
 		u.open(u.from)
 	default:
@@ -966,140 +979,6 @@ func (u *ui) newline(ctx app.Context, e app.Event) {
 	c := utf16Offset(v, from+len(insert))
 	el.Call("setSelectionRange", c, c)
 	u.edit(func(n *note.Note) { n.Body = v })
-}
-
-// imageAccept and maxImage are the image types and size the backend stores.
-const (
-	imageAccept = "image/png,image/jpeg,image/gif,image/webp"
-	maxImage    = 2 << 20
-)
-
-// checkImage explains why file (a JavaScript File) cannot be uploaded, if so.
-func checkImage(f app.Value) string {
-	if !slices.Contains(strings.Split(imageAccept, ","), f.Get("type").String()) {
-		return "Use a PNG, JPEG, GIF or WebP image."
-	}
-	if f.Get("size").Int() > maxImage {
-		return "Images can be up to 2 MiB."
-	}
-	return ""
-}
-
-// insertImages uploads image files (a JavaScript FileList) and inserts a
-// Markdown image for each at the editor's cursor, in order.
-func (u *ui) insertImages(files app.Value) {
-	var list []app.Value
-	for i := range files.Length() {
-		f := files.Index(i)
-		if msg := checkImage(f); msg != "" {
-			u.status = msg
-			u.ctx.Update()
-			return
-		}
-		list = append(list, f)
-	}
-	if len(list) == 0 {
-		return
-	}
-	cur := u.find(u.current)
-	if cur == nil {
-		return
-	}
-	id, n := cur.ID, *cur
-	u.status = "Uploading image…"
-	u.ctx.Async(func() {
-		var text strings.Builder
-		var err error
-		for _, f := range list {
-			var name string
-			if name, err = uploadImage(n, f); err != nil {
-				break
-			}
-			text.WriteString(imageMarkdown(f.Get("name").String(), name))
-		}
-		u.ctx.Dispatch(func(app.Context) {
-			switch {
-			case errors.Is(err, errSignedOut):
-				u.signedOut, u.status = true, ""
-				u.listen()
-			case err != nil:
-				u.status = "Could not upload the image: " + err.Error()
-			default:
-				u.status = ""
-			}
-			if text.Len() > 0 {
-				u.loadAssets(nil) // uploads to notes are listed in Assets too
-			}
-			if text.Len() > 0 && u.current == id && u.editing {
-				u.insertText(text.String())
-			}
-		})
-	})
-}
-
-// openImages shows the images next to the open note, to insert one again.
-func (u *ui) openImages(app.Context, app.Event) {
-	id := u.current
-	u.images, u.imagesMsg = nil, "Loading…"
-	app.Window().GetElementByID("images").Call("showModal")
-	u.ctx.Async(func() {
-		names, err := listImages(id)
-		u.ctx.Dispatch(func(app.Context) {
-			if id != u.current {
-				return
-			}
-			switch {
-			case errors.Is(err, errSignedOut):
-				app.Window().GetElementByID("images").Call("close")
-				u.signedOut = true
-				u.listen()
-			case err != nil:
-				app.Log(err)
-				u.imagesMsg = "Can't load the images: " + err.Error()
-			case len(names) == 0:
-				u.imagesMsg = "No images in this space yet."
-			default:
-				u.images, u.imagesMsg = names, ""
-			}
-		})
-	})
-}
-
-// renderImages renders the dialog listing the images next to the open note.
-func (u *ui) renderImages() app.UI {
-	base := imageBase(rootPrefix(), u.current)
-	return app.Dialog().ID("images").Body(
-		app.H2().Text("Images in this space"),
-		app.P().Text("Images are named after their content. Select one to insert it.").Hidden(len(u.images) == 0),
-		app.P().Attr("role", "status").Text(u.imagesMsg).Hidden(u.imagesMsg == ""),
-		app.Div().Class("gallery").Body(app.Range(u.images).Slice(func(i int) app.UI {
-			name := u.images[i]
-			return app.Button().Type("button").Class("gallery-item").Title("Insert "+name).
-				OnClick(func(app.Context, app.Event) {
-					app.Window().GetElementByID("images").Call("close")
-					if u.editing {
-						u.insertText(imageMarkdown("", name))
-					}
-				}).
-				Body(
-					app.Img().Src(base+name).Alt("").Attr("loading", "lazy"),
-					app.Code().Text(name),
-				)
-		})),
-		app.Div().Class("actions").Body(
-			app.Span().Class("spacer"),
-			app.Button().Type("button").Class("text-button").Text("Close").OnClick(func(app.Context, app.Event) {
-				app.Window().GetElementByID("images").Call("close")
-			}),
-		),
-	)
-}
-
-// imageMarkdown is a Markdown image of src, described by the file name.
-func imageMarkdown(file, src string) string {
-	alt := strings.TrimSuffix(file, path.Ext(file))
-	alt = strings.NewReplacer("[", "", "]", "", "\n", " ", "\\", "").Replace(alt)
-	return "![" + alt + "](" + src + ")\n"
 }
 
 // insertText replaces the editor's selection with s.
@@ -1229,6 +1108,7 @@ func (u *ui) renameSpace(s string) {
 					u.pinSpace(note.SpacePath(name+p[len(s):]), true)
 				}
 			}
+			u.moveImages(s, name)
 			u.expand(name)
 		},
 	}, note.SpaceName(s))
@@ -1451,8 +1331,8 @@ func (u *ui) sync(app.Context) {
 			}
 			u.deleted = u.deleted[len(deleted):]
 			u.notes = note.Merge(remote, u.notes, u.dirty, u.deleted)
-			if !u.assetsLoaded { // note syncs do not change assets
-				u.loadAssets(nil)
+			if len(push) == 0 && len(deleted) == 0 { // not after own edits, which change no images
+				u.loadImages(nil)
 			}
 			if _, ok := u.dirty[u.current]; !ok {
 				u.show(u.current, u.from) // show changes made elsewhere

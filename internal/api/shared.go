@@ -1,7 +1,6 @@
 package api
 
 import (
-	"io/fs"
 	"slices"
 	"strings"
 	"sync"
@@ -126,8 +125,13 @@ func (v *view) put(n note.Note) (note.Note, []string, error) {
 		return n, nil, err
 	}
 	users := v.audience(to)
-	if cur != nil && cur != to {
-		to.importImages(n.ID, n.Body, cur)
+	if cur != nil && cur != to && n.Kind != note.Drawing {
+		if body := to.importImages(n.ID, n.Body, cur); body != n.Body {
+			n.Body = body
+			if n, err = to.put(n); err != nil {
+				return n, nil, err
+			}
+		}
 	}
 	for _, s := range v.stores() {
 		if _, ok := s.get(n.ID); ok && s != to {
@@ -154,17 +158,6 @@ func (v *view) delete(id string) ([]string, error) {
 		}
 	}
 	return users, nil
-}
-
-// putImage stores an image next to note id, which may not move meanwhile.
-func (v *view) putImage(id string, data []byte) (string, error) {
-	v.moves.Lock()
-	defer v.moves.Unlock()
-	s := v.find(id)
-	if s == nil {
-		return "", fs.ErrNotExist
-	}
-	return s.putImage(id, data)
 }
 
 // spaces returns the names of the user's shared spaces.

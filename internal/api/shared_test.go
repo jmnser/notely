@@ -1,6 +1,7 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"net/http"
 	"os"
@@ -133,7 +134,6 @@ func TestSharedCopies(t *testing.T) {
 	s, _, signOn := sharedServer(t)
 	ann, bob := signOn("ann"), signOn("bob")
 	ids := func(h http.Handler) []string { return ids(t, h) }
-	name := pngName(t)
 	// A note in two stores shows its newest copy; deleting deletes both.
 	request(t, bob, http.MethodPut, "/api/notes/dup", `{"title":"Mine","space":"Mine"}`)
 	if _, err := s.shared["Family"].store.put(noteFor("dup", "Theirs", "Family")); err != nil {
@@ -148,8 +148,8 @@ func TestSharedCopies(t *testing.T) {
 	}
 
 	// References of the former layout are made relative when sharing.
-	old := request(t, ann, http.MethodPost, "/api/images", string(pngData(t)))
-	if old.Code != http.StatusOK {
+	const name = "0123456789abcdef0123456789abcdef.png"
+	if old := request(t, ann, http.MethodPost, "/api/images?name="+name, string(pngOf(t, 1))); old.Code != http.StatusOK {
 		t.Fatal(old.Code)
 	}
 	request(t, ann, http.MethodPut, "/api/notes/old", `{"title":"Old","body":"![](/images/`+name+`)"}`)
@@ -233,5 +233,27 @@ func TestLoadUsersSpaces(t *testing.T) {
 		if tt.ok && (len(users) != 2 || !slices.Equal(spaces["ann"], []string{"Family"}) || spaces["bob"] != nil) {
 			t.Errorf("%s: %v %v", tt.json, users, spaces)
 		}
+	}
+}
+
+func TestSharedImages(t *testing.T) {
+	s, dir, signOn := sharedServer(t)
+	ann, bob := signOn("ann"), signOn("bob")
+	writeNote(t, dir, "users/ann/Family/a.png", string(pngOf(t, 1))) // Ann's own, from before sharing
+	w := request(t, bob, http.MethodPost, "/api/images?space=Family&name=a.png", string(pngOf(t, 2)))
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"space":"Family"`) {
+		t.Fatalf("upload: %d %s", w.Code, w.Body)
+	}
+	if _, err := os.Stat(filepath.Join(s.shared["Family"].store.dir, "a.png")); err != nil {
+		t.Errorf("not in the shared space: %v", err)
+	}
+	if list := listImages(t, ann); len(list) != 1 || list[0].Path() != "Family/a.png" {
+		t.Errorf("ann sees %+v", list)
+	}
+	if w := request(t, ann, http.MethodGet, "/api/images/Family/a.png", ""); !bytes.Equal(w.Body.Bytes(), pngOf(t, 2)) {
+		t.Errorf("ann gets: %d", w.Code)
+	}
+	if list := listImages(t, signOn("carl")); len(list) != 0 {
+		t.Errorf("carl sees %+v", list)
 	}
 }

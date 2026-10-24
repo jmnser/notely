@@ -720,7 +720,7 @@ func (m *model) refresh() tea.Cmd {
 			shown = append(shown, n)
 		}
 	}
-	cmd := m.list.SetItems(rows(note.Tree(shown, nil), m.collapsed, m.search.Value() != ""))
+	cmd := m.list.SetItems(rows(note.Tree(shown, nil, nil), m.collapsed, m.search.Value() != ""))
 	m.reselect(m.selectKey)
 	m.render()
 	return cmd

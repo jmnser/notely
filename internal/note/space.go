@@ -13,12 +13,13 @@ type Space struct {
 	Parent *Space
 	Spaces []*Space
 	Notes  []Note
-	Count  int // notes in the space and its subspaces
+	Images []Image
+	Count  int // notes and images in the space and its subspaces
 }
 
-// Tree groups notes into spaces and subspaces. Each level lists pinned
-// spaces first, then sorts by name.
-func Tree(notes []Note, pinned map[string]bool) []*Space {
+// Tree groups notes and images into spaces and subspaces. Each level lists
+// pinned spaces first, then sorts by name.
+func Tree(notes []Note, images []Image, pinned map[string]bool) []*Space {
 	root := &Space{}
 	nodes := map[string]*Space{}
 	var get func(path string) *Space
@@ -38,6 +39,13 @@ func Tree(notes []Note, pinned map[string]bool) []*Space {
 	for _, n := range notes {
 		s := get(n.Space)
 		s.Notes = append(s.Notes, n)
+		for ; s != root; s = s.Parent {
+			s.Count++
+		}
+	}
+	for _, img := range images {
+		s := get(img.Space)
+		s.Images = append(s.Images, img)
 		for ; s != root; s = s.Parent {
 			s.Count++
 		}
