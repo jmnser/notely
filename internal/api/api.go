@@ -5,6 +5,8 @@ import (
 	"errors"
 	"log"
 	"net/http"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"unicode"
@@ -48,31 +50,109 @@ func newHandler(viewOf func(*http.Request) *view, ev *events) http.Handler {
 			h(s, w, r)
 		})
 	}
-	// own serves requests on the user's own store.
-	own := func(pattern string, h func(*store, http.ResponseWriter, *http.Request)) {
-		handle(pattern, func(v *view, w http.ResponseWriter, r *http.Request) { h(v.own, w, r) })
-	}
 	mux.HandleFunc("GET /api/events", ev.serve)
 	handle("POST /api/notes/{id}/images", func(v *view, w http.ResponseWriter, r *http.Request) {
-		if data, ok := readImage(w, r); ok {
-			name, err := v.putImage(r.PathValue("id"), data)
-			if err == nil {
-				v.own.listAsset(r, data, name) // also for notes in shared spaces
-			}
-			writeImage(w, r, name, err)
+		data, ok := readImage(w, r)
+		if !ok {
+			return
 		}
+		name, users, err := v.putImage(r.PathValue("id"), r.URL.Query().Get("name"), data)
+		if err != nil {
+			imageError(w, r, err)
+			return
+		}
+		ev.notify(users, r.Header.Get(clientHeader))
+		writeJSON(w, map[string]string{"name": name})
 	})
-	byNote("GET /api/notes/{id}/images", (*store).listImages)
-	byNote("GET /api/notes/{id}/images/{name}", (*store).serveImage)
-	// The former layout's image API, for /images/<name> references and apps
-	// still cached in browsers.
-	own("POST /api/images", (*store).uploadImage)
-	own("GET /api/images/{name}", (*store).serveImage)
-	own("GET /api/assets", (*store).listAssets)
-	own("POST /api/assets", (*store).uploadAsset)
-	own("GET /api/assets/{path...}", (*store).serveAsset)
-	own("PUT /api/assets/{path...}", (*store).putAsset)
-	own("DELETE /api/assets/{path...}", (*store).removeAsset)
+	// Images by note, for app versions still cached in browsers.
+	byNote("GET /api/notes/{id}/images", func(s *store, w http.ResponseWriter, r *http.Request) {
+		s.mu.Lock()
+		dir, _ := s.noteDir(r.PathValue("id"))
+		s.mu.Unlock()
+		names, err := s.imageNames(dir)
+		if err != nil {
+			serverError(w, err)
+			return
+		}
+		writeJSON(w, names)
+	})
+	byNote("GET /api/notes/{id}/images/{name}", func(s *store, w http.ResponseWriter, r *http.Request) {
+		name := r.PathValue("name")
+		s.mu.Lock()
+		dir, _ := s.noteDir(r.PathValue("id"))
+		s.mu.Unlock()
+		if !note.ImageName.MatchString(name) {
+			http.NotFound(w, r)
+			return
+		}
+		f, err := os.Open(filepath.Join(s.dir, dir, name)) //nolint:gosec // a checked name under the -data flag
+		if err != nil {
+			imageError(w, r, err)
+			return
+		}
+		serveImage(w, r, f, name)
+	})
+	handle("GET /api/images", func(v *view, w http.ResponseWriter, _ *http.Request) {
+		list, err := v.images()
+		if err != nil {
+			serverError(w, err)
+			return
+		}
+		writeJSON(w, list)
+	})
+	// POST /api/images?space=<space>&name=<file name>
+	handle("POST /api/images", func(v *view, w http.ResponseWriter, r *http.Request) {
+		data, ok := readImage(w, r)
+		if !ok {
+			return
+		}
+		q := r.URL.Query()
+		img, users, err := v.addImage(note.SpacePath(q.Get("space")), q.Get("name"), data)
+		if err != nil {
+			imageError(w, r, err)
+			return
+		}
+		ev.notify(users, r.Header.Get(clientHeader))
+		writeJSON(w, img)
+	})
+	handle("GET /api/images/{path...}", func(v *view, w http.ResponseWriter, r *http.Request) {
+		space, name := imageOf(r)
+		var f *os.File
+		var err error
+		if s, rel, ok := v.image(space, name); ok {
+			f, err = os.Open(filepath.Join(s.dir, rel)) //nolint:gosec // a checked name under the -data flag
+		} else {
+			f, err = v.own.findImage(name) // a reference of the former layout, /images/<name>
+		}
+		if err != nil {
+			imageError(w, r, err)
+			return
+		}
+		serveImage(w, r, f, name)
+	})
+	handle("PUT /api/images/{path...}", func(v *view, w http.ResponseWriter, r *http.Request) {
+		stem, to, ok := decodeMove(w, r)
+		if !ok {
+			return
+		}
+		space, name := imageOf(r)
+		img, users, err := v.moveImage(note.Image{Space: space, Name: name}, to, stem)
+		if err != nil {
+			imageError(w, r, err)
+			return
+		}
+		ev.notify(users, r.Header.Get(clientHeader))
+		writeJSON(w, img)
+	})
+	handle("DELETE /api/images/{path...}", func(v *view, w http.ResponseWriter, r *http.Request) {
+		users, err := v.deleteImage(imageOf(r))
+		if err != nil {
+			serverError(w, err)
+			return
+		}
+		ev.notify(users, r.Header.Get(clientHeader))
+		w.WriteHeader(http.StatusNoContent)
+	})
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	})

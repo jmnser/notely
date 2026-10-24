@@ -1,8 +1,9 @@
 package api
 
 import (
+	"bytes"
 	"crypto/sha256"
-	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"io"
 	"io/fs"
@@ -13,15 +14,22 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
+
+	"github.com/jmnser/notely/internal/atomicfile"
+	"github.com/jmnser/notely/internal/note"
 )
 
+// Images are files in the space directories, next to the notes, named by a
+// DNS label, as Kubernetes names, and their extension (note.ImageName).
+// Notes reference them as drawings: by name in their own space, else by
+// space path, so the Markdown also works in the git backup.
 const (
-	maxImage = 2 << 20
-	// imageGrace keeps unreferenced images this long, for notes that
-	// reference them but are still waiting on an offline device to sync.
-	imageGrace = 7 * 24 * time.Hour
+	maxImage      = 2 << 20
+	maxLabel      = 63
+	fallbackLabel = "image" // when nothing of a file name is left
 )
 
 // imageTypes maps the image types accepted for upload to their file
@@ -33,81 +41,218 @@ var imageTypes = map[string]string{
 	"image/webp": ".webp",
 }
 
+// hashName matches the names of images before they had readable ones: the
+// first 128 bits of their SHA-256. They are valid image names too.
+var hashName = regexp.MustCompile(`^[0-9a-f]{32}\.(png|jpg|gif|webp)$`)
+
 var (
-	imageName = regexp.MustCompile(`^[0-9a-f]{32}\.(png|jpg|gif|webp)$`)
-	// imageRef finds the image names a note body mentions, in any form.
-	imageRef = regexp.MustCompile(`[0-9a-f]{32}\.(?:png|jpg|gif|webp)`)
+	errBadImage   = errors.New("use a PNG, JPEG, GIF or WebP image")
+	errBadLabel   = errors.New("use up to 63 lower case letters, digits and -, starting and ending with a letter or digit")
+	errImageTaken = errors.New("an image of that name is in that space")
 )
 
-// Images live next to the notes that use them, in their space directory,
-// named after a hash of their content: an image is stored once per
-// directory, and a name never changes its content. Notes reference them by
-// name, relative to themselves, so the Markdown also works in the git backup.
-
-// noteDir returns the directory, relative to s.dir, of note id. Call with s.mu held.
-func (s *store) noteDir(id string) (string, bool) {
-	rel, ok := s.paths[id]
-	return filepath.Dir(rel), ok
+// label turns a file name without its extension into a DNS label.
+func label(file string) string {
+	file = strings.TrimSuffix(file, path.Ext(file))
+	var b strings.Builder
+	dash := false
+	for _, r := range strings.ToLower(file) {
+		if (r < 'a' || r > 'z') && (r < '0' || r > '9') {
+			dash = b.Len() > 0
+			continue
+		}
+		if dash {
+			b.WriteByte('-')
+			dash = false
+		}
+		b.WriteRune(r)
+	}
+	s := strings.TrimRight(b.String()[:min(b.Len(), maxLabel)], "-")
+	if s == "" {
+		return fallbackLabel
+	}
+	return s
 }
 
-// putImage stores data next to note id, or in the top directory for no id,
-// and returns its name. Storing an image again restarts its grace period.
-func (s *store) putImage(id string, data []byte) (string, error) {
+// version identifies the content of an image file; renames keep it.
+func version(info fs.FileInfo) string {
+	return strconv.FormatInt(info.ModTime().UnixNano(), 36) + "-" + strconv.FormatInt(info.Size(), 36)
+}
+
+func newImage(space, name string, info fs.FileInfo) note.Image {
+	return note.Image{Space: space, Name: name, Uploaded: info.ModTime().UTC(), Version: version(info)}
+}
+
+// relSpace returns space without the shared space's name, the path below s;
+// ok is false if space is not in s.
+func (s *store) relSpace(space string) (string, bool) {
+	if s.space == "" {
+		return space, true
+	}
+	top, rest := topSpace(space)
+	return rest, strings.EqualFold(top, s.space)
+}
+
+// dirOf returns the directory, relative to s.dir, of space: where its notes
+// are, else where its first note would go. Call with s.mu held.
+func (s *store) dirOf(space string) string {
+	for id, n := range s.notes {
+		if n.Space == space {
+			return filepath.Dir(s.paths[id])
+		}
+	}
+	rel, _ := s.relSpace(space)
+	if rel == "" {
+		return "."
+	}
+	return s.spaceDir(fileName(rel, "unnamed"))
+}
+
+// spaceOf returns the space of directory dir, relative to s.dir: that of its
+// notes, else its name. Call with s.mu held.
+func (s *store) spaceOf(dir string) string {
+	found, ok := "", false
+	for id, n := range s.notes {
+		if filepath.Dir(s.paths[id]) == dir && (!ok || n.Space < found) {
+			found, ok = n.Space, true
+		}
+	}
+	switch {
+	case ok:
+		return found
+	case dir == ".":
+		return s.space
+	case s.space == "":
+		return dir
+	}
+	return s.space + "/" + dir
+}
+
+// images lists the images of s, newest first.
+func (s *store) images() ([]note.Image, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	entries, err := os.ReadDir(s.dir)
+	if err != nil {
+		return nil, err
+	}
+	dirs := []string{"."}
+	for _, e := range entries {
+		if e.IsDir() && !strings.HasPrefix(e.Name(), ".") {
+			dirs = append(dirs, e.Name())
+		}
+	}
+	list := []note.Image{}
+	for _, dir := range dirs {
+		entries, err := os.ReadDir(filepath.Join(s.dir, dir))
+		if errors.Is(err, fs.ErrNotExist) {
+			continue
+		} else if err != nil {
+			return nil, err
+		}
+		space := s.spaceOf(dir)
+		for _, e := range entries {
+			if !e.Type().IsRegular() || !note.ImageName.MatchString(e.Name()) {
+				continue
+			}
+			info, err := e.Info()
+			if errors.Is(err, fs.ErrNotExist) {
+				continue
+			} else if err != nil {
+				return nil, err
+			}
+			list = append(list, newImage(space, e.Name(), info))
+		}
+	}
+	slices.SortStableFunc(list, func(a, b note.Image) int { return b.Uploaded.Compare(a.Uploaded) })
+	return list, nil
+}
+
+// imageNames returns the names of the images in dir, relative to s.dir.
+func (s *store) imageNames(dir string) ([]string, error) {
+	entries, err := os.ReadDir(filepath.Join(s.dir, dir))
+	if errors.Is(err, fs.ErrNotExist) {
+		return []string{}, nil
+	} else if err != nil {
+		return nil, err
+	}
+	names := []string{}
+	for _, e := range entries {
+		if e.Type().IsRegular() && note.ImageName.MatchString(e.Name()) {
+			names = append(names, e.Name())
+		}
+	}
+	return names, nil
+}
+
+// stemTaken reports whether an image in names, other than except, has stem.
+func stemTaken(names []string, stem, except string) bool {
+	return slices.ContainsFunc(names, func(name string) bool {
+		return strings.TrimSuffix(name, path.Ext(name)) == stem && name != except
+	})
+}
+
+// addImage stores image data in dir, relative to s.dir, named after file,
+// with -2, -3, … on collisions, unless dir has the same image already. It
+// returns the image's name. Call with s.mu held.
+func (s *store) addImage(dir, file string, data []byte) (string, error) {
 	ext, ok := imageTypes[http.DetectContentType(data)]
 	if !ok {
 		return "", errBadImage
 	}
-	sum := sha256.Sum256(data)
-	name := hex.EncodeToString(sum[:16]) + ext
-
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	dir := "."
-	if id != "" {
-		var ok bool
-		if dir, ok = s.noteDir(id); !ok {
-			return "", fs.ErrNotExist
+	names, err := s.imageNames(dir)
+	if err != nil {
+		return "", err
+	}
+	for _, name := range names {
+		p := filepath.Join(s.dir, dir, name)
+		if fi, err := os.Stat(p); err != nil || fi.Size() != int64(len(data)) {
+			continue
 		}
+		if old, err := os.ReadFile(p); err == nil && bytes.Equal(old, data) { //nolint:gosec // under the -data flag
+			return name, nil
+		}
+	}
+	base := label(file)
+	stem := base
+	for i := 2; stemTaken(names, stem, ""); i++ {
+		suffix := "-" + strconv.Itoa(i)
+		stem = strings.TrimRight(base[:min(len(base), maxLabel-len(suffix))], "-") + suffix
 	}
 	root, err := os.OpenRoot(s.dir)
 	if err != nil {
 		return "", err
 	}
 	defer root.Close() //nolint:errcheck
-	rel := path.Join(filepath.ToSlash(dir), name)
-	// A file cut short, e.g. by a crash, is replaced.
-	if fi, err := root.Stat(rel); err == nil && fi.Size() == int64(len(data)) {
-		now := time.Now()
-		return name, root.Chtimes(rel, now, now)
+	if err := root.MkdirAll(dir, 0o700); err != nil {
+		return "", err
 	}
-	return name, writeFile(root, rel, data)
+	return stem + ext, writeFile(root, path.Join(filepath.ToSlash(dir), stem+ext), data)
 }
 
-var errBadImage = errors.New("use a PNG, JPEG, GIF or WebP image")
-
-// openImage opens image name next to note id.
-func (s *store) openImage(id, name string) (*os.File, error) {
-	if !imageName.MatchString(name) {
-		return nil, fs.ErrNotExist
+// imageFile returns the path, relative to s.dir, of image name in space, if
+// s has it.
+func (s *store) imageFile(space, name string) (string, bool) {
+	if !note.ImageName.MatchString(name) {
+		return "", false
 	}
 	s.mu.Lock()
-	dir, ok := s.noteDir(id)
-	s.mu.Unlock()
-	if !ok {
-		return nil, fs.ErrNotExist
+	defer s.mu.Unlock()
+	if _, ok := s.relSpace(space); !ok {
+		return "", false
 	}
-	root, err := os.OpenRoot(s.dir)
-	if err != nil {
-		return nil, err
+	rel := filepath.Join(s.dir, s.dirOf(space), name)
+	if fi, err := os.Lstat(rel); err != nil || !fi.Mode().IsRegular() {
+		return "", false
 	}
-	defer root.Close() //nolint:errcheck
-	return root.Open(path.Join(filepath.ToSlash(dir), name))
+	rel, err := filepath.Rel(s.dir, rel)
+	return rel, err == nil
 }
 
 // findImage opens the first image called name in the user's directories,
 // for references of the former layout, /images/<name>.
 func (s *store) findImage(name string) (*os.File, error) {
-	if !imageName.MatchString(name) {
+	if !hashName.MatchString(name) {
 		return nil, fs.ErrNotExist
 	}
 	root, err := os.OpenRoot(s.dir)
@@ -139,51 +284,48 @@ func (s *store) findImage(name string) (*os.File, error) {
 	return root.Open(found)
 }
 
-// images returns the names of the images next to note id.
-func (s *store) images(id string) ([]string, error) {
-	s.mu.Lock()
-	dir, ok := s.noteDir(id)
-	s.mu.Unlock()
-	if !ok {
-		return nil, fs.ErrNotExist
-	}
-	entries, err := os.ReadDir(filepath.Join(s.dir, dir))
-	if err != nil {
-		return nil, err
-	}
-	names := []string{}
-	for _, e := range entries {
-		if e.Type().IsRegular() && imageName.MatchString(e.Name()) {
-			names = append(names, e.Name())
+// uses reports whether a note of s other than except references image img.
+// Call with s.mu held.
+func (s *store) uses(img note.Image, except string) bool {
+	for id, n := range s.notes {
+		if id != except && n.Kind != note.Drawing && slices.Contains(note.ImageRefs(n.Body, n.Space), img) {
+			return true
 		}
 	}
-	return names, nil
+	return false
 }
 
-// copyImages copies the images body references from directory from, of any
-// store, to directory to, relative to s.dir, when a note moves there. Call
-// with s.mu held.
-func (s *store) copyImages(from, body, to string) {
+// carryImages brings the images that the body of note id, now in space,
+// references there along from directory from, of any store, to directory
+// to, relative to s.dir, when the note moves there: moved if no other note
+// of src, the store of from if it is s, still uses them in space was, else
+// copied. Call with s.mu held.
+func (s *store) carryImages(id, body, space, from, to, was string, src *store) {
 	if filepath.Clean(from) == filepath.Join(s.dir, to) {
 		return
 	}
-	src, err := os.OpenRoot(from)
-	if errors.Is(err, fs.ErrNotExist) {
-		return
-	}
-	root, err2 := os.OpenRoot(s.dir)
-	if err = errors.Join(err, err2); err != nil {
+	root, err := os.OpenRoot(s.dir)
+	if err != nil {
 		log.Print(err)
 		return
 	}
-	defer src.Close()  //nolint:errcheck
 	defer root.Close() //nolint:errcheck
-	for _, name := range slices.Compact(slices.Sorted(slices.Values(imageRef.FindAllString(body, -1)))) {
-		dst := path.Join(filepath.ToSlash(to), name)
-		if _, err := root.Stat(dst); err == nil {
+	for _, img := range slices.Compact(slices.SortedFunc(slices.Values(note.ImageRefs(body, space)), compareImages)) {
+		if img.Space != space {
+			continue // referenced by space path
+		}
+		dst := path.Join(filepath.ToSlash(to), img.Name)
+		if _, err := root.Lstat(dst); err == nil {
 			continue
 		}
-		data, err := src.ReadFile(name)
+		p := filepath.Join(from, img.Name)
+		if src == s && !s.uses(note.Image{Space: was, Name: img.Name}, id) {
+			if err := os.Rename(p, filepath.Join(s.dir, dst)); err != nil && !errors.Is(err, fs.ErrNotExist) {
+				log.Printf("move image %s: %v", p, err)
+			}
+			continue
+		}
+		data, err := os.ReadFile(p) //nolint:gosec // under the -data flag
 		if errors.Is(err, fs.ErrNotExist) {
 			continue
 		}
@@ -191,9 +333,13 @@ func (s *store) copyImages(from, body, to string) {
 			err = writeFile(root, dst, data)
 		}
 		if err != nil {
-			log.Printf("copy image %s: %v", filepath.Join(from, name), err)
+			log.Printf("copy image %s: %v", p, err)
 		}
 	}
+}
+
+func compareImages(a, b note.Image) int {
+	return strings.Compare(a.Space+"/"+a.Name, b.Space+"/"+b.Name)
 }
 
 // importImages copies the images body references from note id's directory in
@@ -212,19 +358,19 @@ func (s *store) importImages(id, body string, from *store) {
 	if !ok {
 		return
 	}
-	s.copyImages(filepath.Join(from.dir, dir), body, to)
+	s.carryImages(id, body, s.notes[id].Space, filepath.Join(from.dir, dir), to, "", from)
 	root, err := os.OpenRoot(s.dir)
 	if err != nil {
 		log.Print(err)
 		return
 	}
 	defer root.Close() //nolint:errcheck
-	for _, name := range imageRef.FindAllString(body, -1) {
-		dst := path.Join(filepath.ToSlash(to), name)
-		if _, err := root.Stat(dst); err == nil {
+	for _, img := range note.ImageRefs(body, s.notes[id].Space) {
+		dst := path.Join(filepath.ToSlash(to), img.Name)
+		if _, err := root.Stat(dst); err == nil || !hashName.MatchString(img.Name) {
 			continue
 		}
-		f, err := from.findImage(name)
+		f, err := from.findImage(img.Name)
 		if err != nil {
 			continue
 		}
@@ -234,87 +380,263 @@ func (s *store) importImages(id, body string, from *store) {
 			err = writeFile(root, dst, data)
 		}
 		if err != nil {
-			log.Printf("copy image %s: %v", name, err)
+			log.Printf("copy image %s: %v", img.Name, err)
 		}
 	}
 }
 
-// cleanImages deletes the images no note in their directory references and
-// that were not stored within imageGrace, then directories left empty.
-func (s *store) cleanImages(now time.Time) (int, error) {
+// noteDir returns the directory, relative to s.dir, of note id. Call with s.mu held.
+func (s *store) noteDir(id string) (string, bool) {
+	rel, ok := s.paths[id]
+	return filepath.Dir(rel), ok
+}
+
+// imageStores returns the stores that may hold images of space: a shared
+// space's, then the user's own, which keeps notes a user had in a space
+// before it was shared.
+func (v *view) imageStores(space string) []*store {
+	var stores []*store
+	for _, s := range v.shared {
+		if _, ok := s.store.relSpace(space); ok {
+			stores = append(stores, s.store)
+		}
+	}
+	return append(stores, v.own)
+}
+
+// image returns the store holding image name of space and its path there.
+func (v *view) image(space, name string) (*store, string, bool) {
+	for _, s := range v.imageStores(space) {
+		if rel, ok := s.imageFile(space, name); ok {
+			return s, rel, true
+		}
+	}
+	return nil, "", false
+}
+
+// images lists the images of all stores, newest first.
+func (v *view) images() ([]note.Image, error) {
+	var list []note.Image
+	for _, s := range v.stores() {
+		l, err := s.images()
+		if err != nil {
+			return nil, err
+		}
+		list = append(list, l...)
+	}
+	slices.SortStableFunc(list, func(a, b note.Image) int { return b.Uploaded.Compare(a.Uploaded) })
+	return list, nil
+}
+
+// putImage stores an image next to note id, which may not move meanwhile,
+// named after file, and returns its name and the users who see it.
+func (v *view) putImage(id, file string, data []byte) (string, []string, error) {
+	v.moves.Lock()
+	defer v.moves.Unlock()
+	s := v.find(id)
+	if s == nil {
+		return "", nil, fs.ErrNotExist
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	// Lower-case slash-separated paths relative to s.dir: directories
-	// differing in case may be the same on the file system.
-	used := map[string]bool{}
-	anywhere := map[string]bool{} // names referenced as /images/<name>, found in any directory
-	for id, n := range s.notes {
-		dir, _ := s.noteDir(id)
-		for _, name := range imageRef.FindAllString(n.Body, -1) {
-			used[strings.ToLower(path.Join(filepath.ToSlash(dir), name))] = true
-		}
-		for _, m := range oldImageRef.FindAllStringSubmatch(n.Body, -1) {
-			anywhere[m[2]] = true
+	dir, _ := s.noteDir(id)
+	name, err := s.addImage(dir, file, data)
+	return name, v.audience(s), err
+}
+
+// addImage stores an image in space, named after file.
+func (v *view) addImage(space, file string, data []byte) (note.Image, []string, error) {
+	v.moves.Lock()
+	defer v.moves.Unlock()
+	s, space := v.target(note.Note{Space: space}, nil)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	dir := s.dirOf(space)
+	name, err := s.addImage(dir, file, data)
+	if err != nil {
+		return note.Image{}, nil, err
+	}
+	info, err := os.Stat(filepath.Join(s.dir, dir, name)) //nolint:gosec // a checked name under the -data flag
+	if err != nil {
+		return note.Image{}, nil, err
+	}
+	return newImage(space, name, info), v.audience(s), nil
+}
+
+// moveImage renames image from to label stem in space to, which may be in
+// another store, and points the references of all notes to it. It returns
+// the image and the users who see the change.
+func (v *view) moveImage(from note.Image, to, stem string) (note.Image, []string, error) {
+	if !note.ImageName.MatchString(stem + path.Ext(from.Name)) {
+		return note.Image{}, nil, errBadLabel
+	}
+	v.moves.Lock()
+	defer v.moves.Unlock()
+	src, rel, ok := v.image(from.Space, from.Name)
+	if !ok {
+		return note.Image{}, nil, fs.ErrNotExist
+	}
+	dst, to := v.target(note.Note{Space: to}, nil)
+	img := note.Image{Space: to, Name: stem + path.Ext(from.Name)}
+	dst.mu.Lock()
+	dir := dst.dirOf(to)
+	out := filepath.Join(dir, img.Name)
+	dst.mu.Unlock()
+	if src == dst && out == rel {
+		return v.imageInfo(dst, out, img)
+	}
+	names, err := dst.imageNames(dir)
+	if err != nil {
+		return note.Image{}, nil, err
+	}
+	except := "" // the image itself, when it stays in its directory
+	if src == dst && filepath.Dir(rel) == dir {
+		except = from.Name
+	}
+	if stemTaken(names, stem, except) {
+		return note.Image{}, nil, errImageTaken
+	}
+	if err := os.MkdirAll(filepath.Join(dst.dir, dir), 0o700); err != nil {
+		return note.Image{}, nil, err
+	}
+	if err := moveFile(filepath.Join(src.dir, rel), filepath.Join(dst.dir, out)); err != nil {
+		return note.Image{}, nil, err
+	}
+	if d := filepath.Dir(rel); d != "." {
+		_ = os.Remove(filepath.Join(src.dir, d)) // fails while not empty
+	}
+	users := union(v.audience(src), v.audience(dst))
+	users = union(users, v.repoint(note.Image{Space: from.Space, Name: from.Name}, img))
+	img, _, err = v.imageInfo(dst, out, img)
+	return img, users, err
+}
+
+// imageInfo returns img, stored at rel in s, with its upload time and version.
+func (v *view) imageInfo(s *store, rel string, img note.Image) (note.Image, []string, error) {
+	info, err := os.Stat(filepath.Join(s.dir, rel))
+	if err != nil {
+		return note.Image{}, nil, err
+	}
+	return newImage(img.Space, img.Name, info), v.audience(s), nil
+}
+
+// moveFile moves file from to to, which may be on another file system.
+func moveFile(from, to string) error {
+	if err := os.Rename(from, to); err == nil {
+		return nil
+	}
+	data, err := os.ReadFile(from) //nolint:gosec // under the -data flag
+	if err != nil {
+		return err
+	}
+	if err := atomicfile.WriteFile(to, data); err != nil {
+		return err
+	}
+	return os.Remove(from)
+}
+
+// repoint points the references to image from in all notes to image to and
+// returns the users who see the changed notes. Call with v.moves held.
+func (v *view) repoint(from, to note.Image) []string {
+	var users []string
+	for _, s := range v.stores() {
+		for _, n := range s.list() {
+			if n.Kind == note.Drawing {
+				continue
+			}
+			body, changed := note.RewriteImageRefs(n.Body, n.Space, from, to)
+			if !changed {
+				continue
+			}
+			n.Body = body
+			if _, err := s.put(n); err != nil {
+				log.Printf("point %s to %s: %v", n.ID, to.Path(), err)
+				continue
+			}
+			users = union(users, v.audience(s))
 		}
 	}
-	root, err := os.OpenRoot(s.dir)
+	return users
+}
+
+// deleteImage deletes image name of space and returns the users who see it.
+func (v *view) deleteImage(space, name string) ([]string, error) {
+	v.moves.Lock()
+	defer v.moves.Unlock()
+	s, rel, ok := v.image(space, name)
+	if !ok {
+		return nil, nil
+	}
+	if err := os.Remove(filepath.Join(s.dir, rel)); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return nil, err
+	}
+	if d := filepath.Dir(rel); d != "." {
+		_ = os.Remove(filepath.Join(s.dir, d)) // fails while not empty
+	}
+	return v.audience(s), nil
+}
+
+// migrateAssets moves the images of the former Assets space, in .assets,
+// into the space Assets, those of its subspaces into Assets-<subspace>,
+// unless the user has the same image already, uploaded to a note.
+func (s *store) migrateAssets() error {
+	const assetDir = ".assets"
+	from := filepath.Join(s.dir, assetDir)
+	if _, err := os.Stat(from); errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	have := map[[sha256.Size]byte]bool{}
+	list, err := s.images()
 	if err != nil {
-		return 0, err
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, img := range list {
+		data, err := os.ReadFile(filepath.Join(s.dir, s.dirOf(img.Space), img.Name)) //nolint:gosec // under the -data flag
+		if err == nil {
+			have[sha256.Sum256(data)] = true
+		}
+	}
+	root, err := os.OpenRoot(from)
+	if err != nil {
+		return err
 	}
 	defer root.Close() //nolint:errcheck
-	removed := 0
-	var dirs []string
+	moved := 0
 	err = fs.WalkDir(root.FS(), ".", func(rel string, d fs.DirEntry, err error) error {
-		switch {
-		case err != nil:
+		if err != nil || d.IsDir() || !note.ImageName.MatchString(d.Name()) {
 			return err
-		case rel != "." && strings.HasPrefix(d.Name(), "."):
-			if d.IsDir() {
-				return fs.SkipDir
+		}
+		data, err := root.ReadFile(rel)
+		if err != nil {
+			return err
+		}
+		if sum := sha256.Sum256(data); !have[sum] {
+			space := "Assets"
+			if sub := path.Dir(rel); sub != "." {
+				space += "-" + sub
 			}
-			return nil
-		case d.IsDir():
-			if rel != "." {
-				dirs = append(dirs, rel)
+			if _, err := s.addImage(s.spaceDir(space), d.Name(), data); err != nil {
+				return err
 			}
-			return nil
-		case !d.Type().IsRegular() || !imageName.MatchString(d.Name()) || used[strings.ToLower(rel)] || anywhere[d.Name()]:
-			return nil
+			have[sum] = true
+			moved++
 		}
-		info, err := d.Info()
-		if err != nil || now.Sub(info.ModTime()) < imageGrace {
-			return err
-		}
-		if err := root.Remove(rel); err != nil {
-			return err
-		}
-		removed++
-		return nil
+		return root.Remove(rel)
 	})
-	for _, dir := range slices.Backward(dirs) {
-		_ = root.Remove(dir) // fails while not empty
+	if err != nil {
+		return err
 	}
-	return removed, err
+	_ = os.RemoveAll(from) // left: what migrated before, or foreign files
+	log.Printf("moved %d images of %s from Assets to the space Assets", moved, s.dir)
+	return nil
 }
 
-// nextCleanup returns the next Sunday 23:00 after now, in now's time zone.
-func nextCleanup(now time.Time) time.Time {
-	t := time.Date(now.Year(), now.Month(), now.Day(), 23, 0, 0, 0, now.Location())
-	t = t.AddDate(0, 0, int(time.Sunday-t.Weekday()+7)%7)
-	if !t.After(now) {
-		t = t.AddDate(0, 0, 7)
-	}
-	return t
-}
-
-func (s *store) uploadImage(w http.ResponseWriter, r *http.Request) {
-	if data, ok := readImage(w, r); ok {
-		name, err := s.putImage(r.PathValue("id"), data)
-		if err == nil {
-			s.listAsset(r, data, name)
-		}
-		writeImage(w, r, name, err)
-	}
+// imageOf splits the {path...} of an image request into space and name.
+func imageOf(r *http.Request) (space, name string) {
+	space, name = path.Split(r.PathValue("path"))
+	return note.SpacePath(space), name
 }
 
 // readImage reads an uploaded image, or answers why it cannot.
@@ -332,62 +654,51 @@ func readImage(w http.ResponseWriter, r *http.Request) ([]byte, bool) {
 	return data, true
 }
 
-// writeImage answers an upload stored as name, or failed with err.
-func writeImage(w http.ResponseWriter, r *http.Request, name string, err error) {
+// imageError answers a failed image request.
+func imageError(w http.ResponseWriter, r *http.Request, err error) {
 	switch {
-	case errors.Is(err, errBadImage):
+	case errors.Is(err, errBadImage), errors.Is(err, errBadLabel), errors.Is(err, errImageTaken):
 		http.Error(w, err.Error(), http.StatusBadRequest)
 	case errors.Is(err, fs.ErrNotExist):
-		http.Error(w, "no such note", http.StatusNotFound)
-	case err != nil:
-		serverError(w, err)
-	case r.PathValue("id") == "": // POST /api/images of app versions before images moved next to notes
-		writeJSON(w, map[string]string{"path": "/images/" + name})
-	default:
-		writeJSON(w, map[string]string{"name": name})
-	}
-}
-
-func (s *store) serveImage(w http.ResponseWriter, r *http.Request) {
-	name := r.PathValue("name")
-	var f *os.File
-	var err error
-	if id := r.PathValue("id"); id != "" {
-		f, err = s.openImage(id, name)
-	} else {
-		f, err = s.findImage(name) // GET /api/images/{name}: a reference of the former layout
-	}
-	if errors.Is(err, fs.ErrNotExist) {
 		http.NotFound(w, r)
-		return
-	} else if err != nil {
+	default:
+		serverError(w, err)
+	}
+}
+
+// serveImage serves image file f, named name. A name can get other content:
+// only a URL naming the version is cached. The ETag, not the modification
+// time, revalidates, as renames keep it.
+func serveImage(w http.ResponseWriter, r *http.Request, f *os.File, name string) {
+	defer f.Close() //nolint:errcheck
+	info, err := f.Stat()
+	if err != nil {
 		serverError(w, err)
 		return
 	}
-	defer f.Close()                                               //nolint:errcheck
-	imageHeaders(w, name, "private, max-age=31536000, immutable") // the name is the content
-	http.ServeContent(w, r, name, time.Time{}, f)
-}
-
-// imageHeaders sets the headers of image name, served with cache control cache.
-func imageHeaders(w http.ResponseWriter, name, cache string) {
+	v := version(info)
+	cache := "private, no-cache"
+	if r.URL.Query().Get("v") == v || hashName.MatchString(name) { // a hash name is its content
+		cache = "private, max-age=31536000, immutable"
+	}
 	for typ, ext := range imageTypes {
 		if ext == path.Ext(name) {
 			w.Header().Set("Content-Type", typ)
 		}
 	}
+	w.Header().Set("ETag", `"`+v+`"`)
 	w.Header().Set("Cache-Control", cache)
 	w.Header().Set("Content-Security-Policy", "default-src 'none'; sandbox; frame-ancestors 'none'")
+	http.ServeContent(w, r, name, time.Time{}, f)
 }
 
-func (s *store) listImages(w http.ResponseWriter, r *http.Request) {
-	names, err := s.images(r.PathValue("id"))
-	if errors.Is(err, fs.ErrNotExist) {
-		http.Error(w, "no such note", http.StatusNotFound)
-		return
-	} else if err != nil {
-		serverError(w, err)
-		return
+// decodeMove reads the body of PUT /api/images/{path...}: {"name": "<label>",
+// "space": "<space>"}.
+func decodeMove(w http.ResponseWriter, r *http.Request) (name, space string, ok bool) {
+	var in struct{ Name, Space string }
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&in); err != nil {
+		http.Error(w, "invalid request", http.StatusBadRequest)
+		return "", "", false
 	}
-	writeJSON(w, names)
+	return in.Name, note.SpacePath(in.Space), true
 }

@@ -1,7 +1,6 @@
 package api
 
 import (
-	"io/fs"
 	"slices"
 	"strings"
 	"sync"
@@ -154,17 +153,6 @@ func (v *view) delete(id string) ([]string, error) {
 		}
 	}
 	return users, nil
-}
-
-// putImage stores an image next to note id, which may not move meanwhile.
-func (v *view) putImage(id string, data []byte) (string, error) {
-	v.moves.Lock()
-	defer v.moves.Unlock()
-	s := v.find(id)
-	if s == nil {
-		return "", fs.ErrNotExist
-	}
-	return s.putImage(id, data)
 }
 
 // spaces returns the names of the user's shared spaces.

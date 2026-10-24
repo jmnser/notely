@@ -22,7 +22,7 @@ func TestTree(t *testing.T) {
 			walk(s.Spaces, indent+"  ")
 		}
 	}
-	walk(Tree(notes, map[string]bool{"work": true, "work/b": true}), "")
+	walk(Tree(notes, nil, map[string]bool{"work": true, "work/b": true}), "")
 	want := `work work 3 1
   b work/b 1 1
   a work/a 1 0
@@ -44,5 +44,12 @@ func TestWithin(t *testing.T) {
 		if got := Within(c.s, c.root); got != c.want {
 			t.Errorf("Within(%q, %q) = %v", c.s, c.root, got)
 		}
+	}
+}
+
+func TestTreeImages(t *testing.T) {
+	spaces := Tree([]Note{{ID: "1", Space: "work"}}, []Image{{Space: "work", Name: "a.png"}, {Space: "art", Name: "b.png"}}, nil)
+	if len(spaces) != 2 || spaces[0].Name != "art" || len(spaces[0].Images) != 1 || spaces[1].Count != 2 {
+		t.Errorf("tree %+v %+v", spaces[0], spaces[1])
 	}
 }

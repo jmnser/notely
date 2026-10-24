@@ -111,60 +111,30 @@ func uploadImage(n note.Note, file app.Value) (string, error) {
 	return out.Name, err
 }
 
-// listImages returns the names of the images next to note id; none if the
-// backend does not have the note yet.
-func listImages(id string) ([]string, error) {
-	var names []string
-	err := call(get, "/api/notes/"+id+"/images", nil, &names)
-	if errors.Is(err, errNotFound) {
-		return nil, nil
-	}
-	return names, err
+// listImages returns the images of all spaces, newest first.
+func listImages() ([]note.Image, error) {
+	var list []note.Image
+	return list, call(get, "/api/images", nil, &list)
 }
 
-// asset is an image in the Assets space.
-type asset struct {
-	Name     string    `json:"name"` // DNS label and extension
-	Space    string    `json:"space"`
-	Uploaded time.Time `json:"uploaded"`
-	Version  string    `json:"version"`
+// imagePath is the API path of img.
+func imagePath(img note.Image) string { return imageURL("", img, "") }
+
+// addImage stores an image file (a JavaScript File) in space, named after
+// the file.
+func addImage(file app.Value, space string) (note.Image, error) {
+	var img note.Image
+	q := "?space=" + escape(space) + "&name=" + escape(file.Get("name").String())
+	return img, send(post, "/api/images"+q, file, file.Get("type").String(), uploadTimeout, &img)
 }
 
-// key is the asset's path under /api/assets/.
-func (a asset) key() string {
-	if a.Space == "" {
-		return a.Name
-	}
-	return a.Space + "/" + a.Name
+// moveImage renames img to label name in space.
+func moveImage(img note.Image, name, space string) (note.Image, error) {
+	var out note.Image
+	return out, call(put, imagePath(img), map[string]string{"name": name, "space": space}, &out)
 }
 
-// stem is the asset's name without its extension.
-func (a asset) stem() string {
-	stem, _, _ := strings.Cut(a.Name, ".") // labels hold no dots
-	return stem
-}
-
-// assetURL loads asset a; naming its version lets the browser cache it.
-func assetURL(a asset) string { return rootPrefix() + "/api/assets/" + a.key() + "?v=" + a.Version }
-
-func listAssets() ([]asset, error) {
-	var list []asset
-	return list, call(get, "/api/assets", nil, &list)
-}
-
-// uploadAsset stores an image file (a JavaScript File) in subspace space of
-// the Assets space, named after the file.
-func uploadAsset(file app.Value, space string) (asset, error) {
-	var a asset
-	q := "?name=" + escape(file.Get("name").String()) + "&space=" + escape(space)
-	return a, send(post, "/api/assets"+q, file, file.Get("type").String(), uploadTimeout, &a)
-}
-
-// putAsset renames asset a to name in subspace space.
-func putAsset(a asset, name, space string) (asset, error) {
-	var out asset
-	return out, call(put, "/api/assets/"+a.key(), map[string]string{"name": name, "space": space}, &out)
-}
+func deleteImage(img note.Image) error { return call(del, imagePath(img), nil, nil) }
 
 // escape encodes s for a URL query, keeping net/url out of the wasm binary.
 func escape(s string) string {

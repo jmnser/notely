@@ -133,7 +133,6 @@ func TestSharedCopies(t *testing.T) {
 	s, _, signOn := sharedServer(t)
 	ann, bob := signOn("ann"), signOn("bob")
 	ids := func(h http.Handler) []string { return ids(t, h) }
-	name := pngName(t)
 	// A note in two stores shows its newest copy; deleting deletes both.
 	request(t, bob, http.MethodPut, "/api/notes/dup", `{"title":"Mine","space":"Mine"}`)
 	if _, err := s.shared["Family"].store.put(noteFor("dup", "Theirs", "Family")); err != nil {
@@ -148,8 +147,8 @@ func TestSharedCopies(t *testing.T) {
 	}
 
 	// References of the former layout are made relative when sharing.
-	old := request(t, ann, http.MethodPost, "/api/images", string(pngData(t)))
-	if old.Code != http.StatusOK {
+	const name = "0123456789abcdef0123456789abcdef.png"
+	if old := request(t, ann, http.MethodPost, "/api/images?name="+name, string(pngOf(t, 1))); old.Code != http.StatusOK {
 		t.Fatal(old.Code)
 	}
 	request(t, ann, http.MethodPut, "/api/notes/old", `{"title":"Old","body":"![](/images/`+name+`)"}`)

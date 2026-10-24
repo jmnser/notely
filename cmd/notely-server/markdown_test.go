@@ -10,7 +10,7 @@ import (
 const list = "# Todo\n\n- [ ] one\n- [x] two\n\n```\n- [ ] in code\n```\n\n1. [X] three\n   - [ ] nested\n"
 
 func TestRender(t *testing.T) {
-	got := render(list, "", "a")
+	got := render(list, "", "", nil)
 	for _, want := range []string{
 		`<div class="markdown">`,
 		`<input type="checkbox" data-task="0">`,
@@ -26,14 +26,14 @@ func TestRender(t *testing.T) {
 	if strings.Contains(got, "disabled") || strings.Contains(got, `data-task="4"`) {
 		t.Errorf("render() = %s", got)
 	}
-	if got := render(`<script>x</script>`, "", "a"); strings.Contains(got, "<script>") {
+	if got := render(`<script>x</script>`, "", "", nil); strings.Contains(got, "<script>") {
 		t.Errorf("render() keeps raw HTML: %s", got)
 	}
 	for _, src := range []string{
 		"[x](javascript:alert(1))", "[x](JavaScript:alert(1))", "[x](vbscript:x)", "[x](data:text/html,<b>)",
 		"![x](javascript:alert(1))", "<javascript:alert(1)>",
 	} {
-		if got := strings.ToLower(render(src, "", "a")); strings.Contains(got, `href="javascript`) ||
+		if got := strings.ToLower(render(src, "", "", nil)); strings.Contains(got, `href="javascript`) ||
 			strings.Contains(got, `src="javascript`) || strings.Contains(got, `="vbscript`) || strings.Contains(got, `="data:text`) {
 			t.Errorf("render(%q) keeps a script link: %s", src, got)
 		}
@@ -106,7 +106,7 @@ func TestToggleGroups(t *testing.T) {
 }
 
 func TestRenderMermaid(t *testing.T) {
-	got := render("```mermaid\ngraph TD\n  A-->B[\"<b>x</b>\"]\n```\n\n```go\nx\n```\n", "", "a")
+	got := render("```mermaid\ngraph TD\n  A-->B[\"<b>x</b>\"]\n```\n\n```go\nx\n```\n", "", "", nil)
 	want := `<pre class="mermaid">graph TD
   A--&gt;B[&quot;&lt;b&gt;x&lt;/b&gt;&quot;]
 </pre>`
@@ -119,14 +119,18 @@ func TestRenderMermaid(t *testing.T) {
 }
 
 func TestRenderImages(t *testing.T) {
-	const img = "0123456789abcdef0123456789abcdef.png"
-	got := render("![cat]("+img+")\n\n![old](/images/"+img+")\n\n![web](https://example.com/a.png)\n\n"+
-		"[full]("+img+")", "/notely", "a")
+	const hash = "0123456789abcdef0123456789abcdef.png"
+	got := render("![cat](cat.png)\n\n![old](/images/"+hash+")\n\n![web](https://example.com/a.png)\n\n"+
+		"[full](cat.png) ![trip](<Home Trips/map.jpg> \"Map\") ![top](/top.gif) ![Up](Cat.png)", "/notely", "Work",
+		map[string]string{"Work/cat.png": "v1"})
 	for _, want := range []string{
-		`<a href="/notely/api/notes/a/images/` + img + `">full</a>`,
-		`<img loading="lazy" title="` + img + `" src="/notely/api/notes/a/images/` + img + `" alt="cat">`,
-		`<img loading="lazy" title="` + img + `" src="/notely/api/images/` + img + `" alt="old">`,
+		`<a href="/notely/api/images/Work/cat.png?v=v1">full</a>`,
+		`<img src="/notely/api/images/Work/cat.png?v=v1" alt="cat" title="cat.png" loading="lazy">`,
+		`<img src="/notely/api/images/` + hash + `" alt="old" title="` + hash + `" loading="lazy">`,
 		`<img src="https://example.com/a.png" alt="web">`,
+		`<img src="/notely/api/images/Home%20Trips/map.jpg" alt="trip" title="Map" loading="lazy">`,
+		`<img src="/notely/api/images/top.gif" alt="top" title="top.gif" loading="lazy">`,
+		`<img src="Cat.png" alt="Up">`, // not an image name
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("render() lacks %q:\n%s", want, got)
@@ -135,12 +139,12 @@ func TestRenderImages(t *testing.T) {
 }
 
 func TestRenderDrawings(t *testing.T) {
-	got := render("![](Flow.excalidraw) ![alt](<My \"x\".excalidraw>) ![](https://example.com/a.excalidraw) ![](pic.png)", "", "a")
+	got := render("![](Flow.excalidraw) ![alt](<My \"x\".excalidraw>) ![](https://example.com/a.excalidraw) ![](Pic.png)", "", "", nil)
 	for _, want := range []string{
 		`<button type="button" class="drawing" data-drawing="Flow.excalidraw">Flow</button>`,
 		`data-drawing="My &#34;x&#34;.excalidraw">My &#34;x&#34;</button>`,
 		`<img src="https://example.com/a.excalidraw"`,
-		`<img src="pic.png"`,
+		`<img src="Pic.png"`,
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("render() lacks %q:\n%s", want, got)

@@ -1,7 +1,6 @@
 package api
 
 import (
-	"crypto/sha256"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -28,15 +27,14 @@ type store struct {
 	dir   string
 	space string // a shared space's name: its notes' top space, left out of their paths
 	notes map[string]note.Note
-	paths map[string]string            // id → file path relative to dir
-	sums  map[string][sha256.Size]byte // asset version → SHA-256, see assetSum
+	paths map[string]string // id → file path relative to dir
 }
 
 func openStore(dir string) (*store, error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, err
 	}
-	s := &store{dir: dir, notes: map[string]note.Note{}, paths: map[string]string{}, sums: map[string][sha256.Size]byte{}}
+	s := &store{dir: dir, notes: map[string]note.Note{}, paths: map[string]string{}}
 	var stale []string // older files of a note, left by a crash while moving it
 	err := filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
 		switch {
@@ -115,6 +113,7 @@ func (s *store) put(n note.Note) (note.Note, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	old, exists := s.paths[n.ID]
+	was := s.notes[n.ID].Space
 	rel := s.pathFor(n, old)
 	data, err := encode(n)
 	if err != nil {
@@ -124,7 +123,7 @@ func (s *store) put(n note.Note) (note.Note, error) {
 		return note.Note{}, err
 	}
 	if exists && old != rel && !s.sameFile(old, rel) {
-		s.copyImages(filepath.Join(s.dir, filepath.Dir(old)), n.Body, filepath.Dir(rel))
+		s.carryImages(n.ID, n.Body, n.Space, filepath.Join(s.dir, filepath.Dir(old)), filepath.Dir(rel), was, s)
 		if err := s.remove(old); err != nil {
 			log.Print(err)
 		}

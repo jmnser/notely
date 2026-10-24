@@ -2,35 +2,58 @@ package api
 
 import (
 	"bytes"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"image"
+	"image/color"
 	"image/png"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/jmnser/notely/internal/note"
 )
 
 func pngData(t *testing.T) []byte {
 	t.Helper()
+	return pngOf(t, 0)
+}
+
+// pngOf returns a PNG image that differs for each shade.
+func pngOf(t *testing.T, shade uint8) []byte {
+	t.Helper()
+	img := image.NewGray(image.Rect(0, 0, 2, 2))
+	img.SetGray(0, 0, color.Gray{Y: shade})
 	var buf bytes.Buffer
-	if err := png.Encode(&buf, image.NewGray(image.Rect(0, 0, 2, 2))); err != nil {
+	if err := png.Encode(&buf, img); err != nil {
 		t.Fatal(err)
 	}
 	return buf.Bytes()
 }
 
-// pngName is the name pngData is stored under.
-func pngName(t *testing.T) string {
+// pngName is the name pngData is stored under when uploaded without a file name.
+func pngName(*testing.T) string { return "image.png" }
+
+// upload posts data to path and returns the stored name.
+func upload(t *testing.T, h http.Handler, path string, data []byte) string {
 	t.Helper()
-	sum := sha256.Sum256(pngData(t))
-	return hex.EncodeToString(sum[:16]) + ".png"
+	w := request(t, h, http.MethodPost, path, string(data))
+	var out struct{ Name string }
+	if err := json.Unmarshal(w.Body.Bytes(), &out); w.Code != http.StatusOK || err != nil {
+		t.Fatalf("upload %s: %d %s", path, w.Code, w.Body)
+	}
+	return out.Name
+}
+
+func listImages(t *testing.T, h http.Handler) []note.Image {
+	t.Helper()
+	var list []note.Image
+	w := request(t, h, http.MethodGet, "/api/images", "")
+	if err := json.Unmarshal(w.Body.Bytes(), &list); err != nil {
+		t.Fatalf("list: %d %s", w.Code, w.Body)
+	}
+	return list
 }
 
 func TestImages(t *testing.T) {
@@ -43,31 +66,48 @@ func TestImages(t *testing.T) {
 	request(t, h, http.MethodPut, "/api/notes/a", `{"title":"a","space":"work"}`)
 	img := pngData(t)
 
-	names := make([]string, 0, 2)
-	for range 2 { // the same image is stored once, under the same name
-		w := request(t, h, http.MethodPost, "/api/notes/a/images", string(img))
-		var out struct{ Name string }
-		if err := json.Unmarshal(w.Body.Bytes(), &out); w.Code != http.StatusOK || err != nil {
-			t.Fatalf("upload: %d %s", w.Code, w.Body)
+	// Named after the file; the same image is stored once per space.
+	for range 2 {
+		if name := upload(t, h, "/api/notes/a/images?name=My%20Photo%20(1).PNG", img); name != "my-photo-1.png" {
+			t.Fatalf("name = %q", name)
 		}
-		names = append(names, out.Name)
 	}
-	name := names[0]
-	if names[1] != name || !imageName.MatchString(name) || !strings.HasSuffix(name, ".png") {
-		t.Fatalf("names = %v", names)
+	if name := upload(t, h, "/api/notes/a/images?name=my-photo-1.png", pngOf(t, 1)); name != "my-photo-1-2.png" {
+		t.Errorf("collision: %q", name)
 	}
-	if _, err := os.Stat(filepath.Join(dir, "work", name)); err != nil {
+	if name := upload(t, h, "/api/notes/a/images?name=%C3%BC.png", pngOf(t, 2)); name != "image.png" {
+		t.Errorf("nothing left of the name: %q", name)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "work", "my-photo-1.png")); err != nil {
 		t.Errorf("not next to the note: %v", err)
 	}
-	if w := request(t, h, http.MethodGet, "/api/notes/a/images", ""); w.Body.String() != `["`+name+`"]`+"\n" {
-		t.Errorf("list: %d %s", w.Code, w.Body)
+	list := listImages(t, h)
+	if len(list) != 3 || list[0].Space != "work" || list[0].Version == "" {
+		t.Fatalf("list = %+v", list)
 	}
 
-	w := request(t, h, http.MethodGet, "/api/notes/a/images/"+name, "")
+	w := request(t, h, http.MethodGet, "/api/images/work/my-photo-1.png", "")
 	if w.Code != http.StatusOK || !bytes.Equal(w.Body.Bytes(), img) || w.Header().Get("Content-Type") != "image/png" ||
-		!strings.Contains(w.Header().Get("Content-Security-Policy"), "sandbox") {
+		!strings.Contains(w.Header().Get("Content-Security-Policy"), "sandbox") ||
+		w.Header().Get("Cache-Control") != "private, no-cache" || w.Header().Get("ETag") == "" {
 		t.Errorf("get: %d %v", w.Code, w.Header())
 	}
+	var v string
+	for _, i := range list {
+		if i.Name == "my-photo-1.png" {
+			v = i.Version
+		}
+	}
+	if w := request(t, h, http.MethodGet, "/api/images/work/my-photo-1.png?v="+v, ""); !strings.Contains(w.Header().Get("Cache-Control"), "immutable") {
+		t.Errorf("versioned get: %v", w.Header())
+	}
+	if w := request(t, h, http.MethodGet, "/api/notes/a/images/my-photo-1.png", ""); w.Code != http.StatusOK {
+		t.Errorf("get by note: %d", w.Code)
+	}
+	if w := request(t, h, http.MethodGet, "/api/notes/a/images", ""); !strings.Contains(w.Body.String(), `"my-photo-1.png"`) {
+		t.Errorf("list by note: %d %s", w.Code, w.Body)
+	}
+
 	for _, c := range []struct {
 		name, method, path, body string
 		want                     int
@@ -77,68 +117,121 @@ func TestImages(t *testing.T) {
 		{"too large", http.MethodPost, "/api/notes/a/images", string(img) + strings.Repeat("x", maxImage), http.StatusBadRequest},
 		{"unknown note", http.MethodPost, "/api/notes/b/images", string(img), http.StatusNotFound},
 		{"unknown note list", http.MethodGet, "/api/notes/b/images", "", http.StatusNotFound},
-		{"missing", http.MethodGet, "/api/notes/a/images/00000000000000000000000000000000.png", "", http.StatusNotFound},
-		{"bad name", http.MethodGet, "/api/notes/a/images/..%2f.users.json", "", http.StatusNotFound},
-		{"svg name", http.MethodGet, "/api/notes/a/images/00000000000000000000000000000000.svg", "", http.StatusNotFound},
+		{"missing", http.MethodGet, "/api/images/work/missing.png", "", http.StatusNotFound},
+		{"bad name", http.MethodGet, "/api/images/..%2f.users.json", "", http.StatusNotFound},
+		{"bad name by note", http.MethodGet, "/api/notes/a/images/..%2f.users.json", "", http.StatusNotFound},
+		{"svg name", http.MethodGet, "/api/images/work/a.svg", "", http.StatusNotFound},
 	} {
 		if w := request(t, h, c.method, c.path, c.body); w.Code != c.want {
-			t.Errorf("%s: %d, want %d", c.name, w.Code, c.want)
+			t.Errorf("%s: %d, want %d: %s", c.name, w.Code, c.want, w.Body)
 		}
-	}
-
-	// The former layout's API: uploads go to the top directory, and images
-	// are found in any directory.
-	w = request(t, h, http.MethodPost, "/api/images", string(img))
-	if w.Code != http.StatusOK || w.Body.String() != `{"path":"/images/`+name+`"}`+"\n" {
-		t.Errorf("old upload: %d %s", w.Code, w.Body)
-	}
-	if _, err := os.Stat(filepath.Join(dir, name)); err != nil {
-		t.Errorf("old upload not in the top directory: %v", err)
-	}
-	if err := os.Remove(filepath.Join(dir, name)); err != nil {
-		t.Fatal(err)
-	}
-	if w := request(t, h, http.MethodGet, "/api/images/"+name, ""); w.Code != http.StatusOK || !bytes.Equal(w.Body.Bytes(), img) {
-		t.Errorf("old get: %d", w.Code)
-	}
-
-	// Moving a note takes the images it references along.
-	request(t, h, http.MethodPut, "/api/notes/a", `{"title":"a","space":"home","body":"![x](`+name+`)"}`)
-	if _, err := os.Stat(filepath.Join(dir, "home", name)); err != nil {
-		t.Errorf("not copied along: %v", err)
-	}
-	if w := request(t, h, http.MethodGet, "/api/notes/a/images/"+name, ""); w.Code != http.StatusOK {
-		t.Errorf("get after move: %d", w.Code)
 	}
 }
 
-func TestCleanImages(t *testing.T) {
+func TestMoveImages(t *testing.T) {
 	dir := t.TempDir()
 	s, err := openStore(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	const used, unused, fresh, old = "00000000000000000000000000000001.png", "00000000000000000000000000000002.png",
-		"00000000000000000000000000000003.png", "00000000000000000000000000000004.png"
-	if _, err := s.put(note.Note{ID: "a", Title: "a", Space: "work", Body: "![x](" + used + ") ![y](/images/" + old + ")"}); err != nil {
-		t.Fatal(err)
+	h := newHandler(only(s), newEvents())
+	img := pngData(t)
+	request(t, h, http.MethodPut, "/api/notes/a", `{"title":"a","space":"work"}`)
+	upload(t, h, "/api/notes/a/images?name=my-photo-1.png", img)
+	upload(t, h, "/api/notes/a/images?name=image.png", pngOf(t, 1))
+
+	// Uploads straight to a space, which then exists with images only.
+	w := request(t, h, http.MethodPost, "/api/images?space=Art/&name=sky.webp", string(img))
+	var up note.Image
+	if err := json.Unmarshal(w.Body.Bytes(), &up); err != nil || up.Space != "Art" || up.Name != "sky.png" {
+		t.Errorf("upload to a space: %d %s", w.Code, w.Body)
 	}
-	week := time.Now().Add(-8 * 24 * time.Hour)
-	for _, f := range []string{"work/" + used, "work/" + unused, "work/" + fresh, used, "gone/" + unused, ".sync/" + unused, old} {
-		writeNote(t, dir, f, "img")
-		if f != "work/"+fresh {
-			if err := os.Chtimes(filepath.Join(dir, f), week, week); err != nil {
-				t.Fatal(err)
-			}
+	if w := request(t, h, http.MethodGet, "/api/images/Art/sky.png", ""); w.Code != http.StatusOK {
+		t.Errorf("get from a space without notes: %d", w.Code)
+	}
+
+	// Renaming and moving points the references of all notes to the image.
+	request(t, h, http.MethodPut, "/api/notes/b", `{"title":"b","body":"![x](work/my-photo-1.png) ![y](Art/sky.png)"}`)
+	request(t, h, http.MethodPut, "/api/notes/a", `{"title":"a","space":"work","body":"![x](my-photo-1.png)"}`)
+	w = request(t, h, http.MethodPut, "/api/images/work/my-photo-1.png", `{"name":"beach","space":"Home Trips"}`)
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"name":"beach.png"`) {
+		t.Fatalf("move: %d %s", w.Code, w.Body)
+	}
+	for _, c := range []struct {
+		name, path, body string
+		want             int
+	}{
+		{"bad label", "/api/images/work/beach.png", `{"name":"Bad Name","space":"work"}`, http.StatusBadRequest},
+		{"taken", "/api/images/Home%20Trips/beach.png", `{"name":"image","space":"work"}`, http.StatusBadRequest},
+		{"missing", "/api/images/work/missing.png", `{"name":"x","space":"work"}`, http.StatusNotFound},
+	} {
+		if w := request(t, h, http.MethodPut, c.path, c.body); w.Code != c.want {
+			t.Errorf("%s: %d, want %d: %s", c.name, w.Code, c.want, w.Body)
 		}
 	}
-	n, err := s.cleanImages(time.Now())
-	if err != nil || n != 3 {
-		t.Fatalf("cleanImages = %d, %v, want 3 removed", n, err)
+	if _, err := os.Stat(filepath.Join(dir, "Home Trips", "beach.png")); err != nil {
+		t.Errorf("not moved: %v", err)
 	}
+	for id, want := range map[string]string{"a": "![x](<Home Trips/beach.png>)", "b": "![x](<Home Trips/beach.png>) ![y](Art/sky.png)"} {
+		if n, _ := s.get(id); n.Body != want {
+			t.Errorf("%s: %q, want %q", id, n.Body, want)
+		}
+	}
+	request(t, h, http.MethodPut, "/api/images/Art/sky.png", `{"name":"sky","space":""}`)
+	if _, err := os.Stat(filepath.Join(dir, "Art")); err == nil {
+		t.Error("emptied space directory left")
+	}
+	if n, _ := s.get("b"); !strings.HasSuffix(n.Body, "![y](sky.png)") {
+		t.Errorf("b: %q", n.Body)
+	}
+
+	if w := request(t, h, http.MethodDelete, "/api/images/sky.png", ""); w.Code != http.StatusNoContent {
+		t.Errorf("delete: %d", w.Code)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "sky.png")); err == nil {
+		t.Error("not deleted")
+	}
+}
+
+func TestOldImageRefs(t *testing.T) {
+	dir := t.TempDir()
+	s, err := openStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := newHandler(only(s), newEvents())
+	img := pngData(t)
+	// The former layout's references, /images/<hash>, find the image anywhere.
+	const hash = "0123456789abcdef0123456789abcdef.png"
+	writeNote(t, dir, "work/"+hash, string(img))
+	if w := request(t, h, http.MethodGet, "/api/images/"+hash, ""); w.Code != http.StatusOK ||
+		!strings.Contains(w.Header().Get("Cache-Control"), "immutable") {
+		t.Errorf("old get: %d %v", w.Code, w.Header())
+	}
+}
+
+func TestMoveNoteCarriesImages(t *testing.T) {
+	dir := t.TempDir()
+	s, err := openStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	put := func(id, space, body string) {
+		t.Helper()
+		if _, err := s.put(note.Note{ID: id, Title: id, Space: space, Body: body}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	put("a", "work", "![](own.png) ![](shared.png) ![](/top.png)")
+	put("b", "work", "![](shared.png)")
+	for _, f := range []string{"work/own.png", "work/shared.png", "work/unused.png", "top.png"} {
+		writeNote(t, dir, f, "img")
+	}
+	put("a", "home", "![](own.png) ![](shared.png) ![](/top.png)")
 	for f, want := range map[string]bool{
-		"work/" + used: true, "work/" + unused: false, "work/" + fresh: true, used: false,
-		"gone": false, ".sync/" + unused: true, "work/a.md": true, old: true,
+		"home/own.png": true, "work/own.png": false, // used by a only: moved
+		"home/shared.png": true, "work/shared.png": true, // also used by b: copied
+		"home/top.png": false, "top.png": true, "work/unused.png": true,
 	} {
 		if _, err := os.Stat(filepath.Join(dir, f)); (err == nil) != want {
 			t.Errorf("%s exists: %v, want %v", f, err == nil, want)
@@ -146,16 +239,28 @@ func TestCleanImages(t *testing.T) {
 	}
 }
 
-func TestNextCleanup(t *testing.T) {
-	for now, want := range map[string]string{
-		"2026-10-20T10:00:00Z": "2026-10-25T23:00:00Z", // Tuesday
-		"2026-10-25T22:59:00Z": "2026-10-25T23:00:00Z", // Sunday, before
-		"2026-10-25T23:00:00Z": "2026-11-01T23:00:00Z", // Sunday, at
-		"2026-10-26T01:00:00Z": "2026-11-01T23:00:00Z", // Monday
+func TestMigrateAssets(t *testing.T) {
+	dir := t.TempDir()
+	writeNote(t, dir, "work/0123456789abcdef0123456789abcdef.png", string(pngOf(t, 1)))
+	writeNote(t, dir, ".assets/from-note.png", string(pngOf(t, 1)))
+	writeNote(t, dir, ".assets/logo.png", string(pngOf(t, 2)))
+	writeNote(t, dir, ".assets/icons/logo.png", string(pngOf(t, 3)))
+	s, err := openStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.migrateAssets(); err != nil {
+		t.Fatal(err)
+	}
+	for f, want := range map[string]bool{
+		"Assets/logo.png": true, "Assets-icons/logo.png": true, "Assets/from-note.png": false, ".assets": false,
 	} {
-		n, _ := time.Parse(time.RFC3339, now)
-		if got := nextCleanup(n).Format(time.RFC3339); got != want {
-			t.Errorf("nextCleanup(%s) = %s, want %s", now, got, want)
+		if _, err := os.Stat(filepath.Join(dir, f)); (err == nil) != want {
+			t.Errorf("%s exists: %v, want %v", f, err == nil, want)
 		}
+	}
+	list, err := s.images()
+	if err != nil || len(list) != 3 {
+		t.Errorf("images = %+v, %v", list, err)
 	}
 }

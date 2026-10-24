@@ -50,6 +50,9 @@ func Open(dir, usersFile string) (*Server, error) {
 		if srv.stores[name], err = openStore(filepath.Join(dir, usersDir, name)); err != nil {
 			return nil, err
 		}
+		if err := srv.stores[name].migrateAssets(); err != nil {
+			return nil, fmt.Errorf("move the assets of %s to a space: %w", name, err)
+		}
 		for _, sp := range spaces[name] {
 			if srv.shared[sp] == nil {
 				st, err := openStore(filepath.Join(dir, sharedDir, sp))
@@ -112,36 +115,6 @@ func (s *Server) RunSync(ctx context.Context, interval time.Duration) {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Minute)
 	defer cancel()
 	s.sync.syncAll(ctx)
-}
-
-// RunCleanup deletes unreferenced images every Sunday at 23:00 local time
-// until ctx is done.
-func (s *Server) RunCleanup(ctx context.Context) {
-	for {
-		t := time.NewTimer(time.Until(nextCleanup(time.Now())))
-		select {
-		case <-ctx.Done():
-			t.Stop()
-			return
-		case now := <-t.C:
-			for _, name := range slices.Sorted(maps.Keys(s.stores)) {
-				cleanImages(s.stores[name], name, now)
-			}
-			for _, name := range slices.Sorted(maps.Keys(s.shared)) {
-				cleanImages(s.shared[name].store, "the shared space "+name, now)
-			}
-		}
-	}
-}
-
-func cleanImages(s *store, owner string, now time.Time) {
-	n, err := s.cleanImages(now)
-	if err != nil {
-		log.Printf("clean images of %s: %v", owner, err)
-	}
-	if n > 0 {
-		log.Printf("deleted %d unreferenced images of %s", n, owner)
-	}
 }
 
 // HashPassword returns the argon2id hash of password for the users file.

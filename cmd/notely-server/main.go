@@ -71,7 +71,6 @@ func main() {
 		srv.RunSync(ctx, *interval)
 		close(synced)
 	}()
-	go srv.RunCleanup(ctx)
 
 	err = serve.Run(*addr, routes(*base, srv, &manifestID{id: cmp.Or(*base, "/"), next: &app.Handler{
 		Name:        "Notely",
