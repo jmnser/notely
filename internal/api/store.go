@@ -127,6 +127,7 @@ func (s *store) put(n note.Note) (note.Note, error) {
 		if err := s.remove(old); err != nil {
 			log.Print(err)
 		}
+		s.markDir(filepath.Dir(old), was) // for the images left, if it has no more notes
 	}
 	s.notes[n.ID] = n
 	s.paths[n.ID] = rel
@@ -143,6 +144,7 @@ func (s *store) delete(id string) error {
 	if err := s.remove(rel); err != nil {
 		return err
 	}
+	s.markDir(filepath.Dir(rel), s.notes[id].Space)
 	delete(s.notes, id)
 	delete(s.paths, id)
 	return nil
@@ -229,9 +231,7 @@ func (s *store) remove(rel string) error {
 	if err := os.Remove(path); err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return err
 	}
-	if dir := filepath.Dir(path); dir != filepath.Clean(s.dir) {
-		_ = os.Remove(dir) // fails while not empty
-	}
+	s.removeDir(filepath.Dir(rel))
 	return nil
 }
 

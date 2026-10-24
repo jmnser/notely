@@ -17,6 +17,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/jmnser/notely/internal/atomicfile"
 	"github.com/jmnser/notely/internal/note"
@@ -108,8 +109,13 @@ func (s *store) dirOf(space string) string {
 	return s.spaceDir(fileName(rel, "unnamed"))
 }
 
+// spaceFile holds, in a space directory with images, the space's path below
+// the store: directory names lose the "/" of subspaces, and a space without
+// notes has only its images.
+const spaceFile = ".space"
+
 // spaceOf returns the space of directory dir, relative to s.dir: that of its
-// notes, else its name. Call with s.mu held.
+// notes, else the one its space file names, else its name. Call with s.mu held.
 func (s *store) spaceOf(dir string) string {
 	found, ok := "", false
 	for id, n := range s.notes {
@@ -117,15 +123,61 @@ func (s *store) spaceOf(dir string) string {
 			found, ok = n.Space, true
 		}
 	}
-	switch {
-	case ok:
+	if ok {
 		return found
-	case dir == ".":
-		return s.space
-	case s.space == "":
-		return dir
 	}
-	return s.space + "/" + dir
+	rel := ""
+	if dir != "." {
+		rel = dir
+		data, err := os.ReadFile(filepath.Join(s.dir, dir, spaceFile)) //nolint:gosec // under the -data flag
+		if p := note.SpacePath(string(data)); err == nil && p != "" && !strings.ContainsFunc(p, unicode.IsControl) {
+			rel = p
+		}
+	}
+	switch {
+	case s.space == "":
+		return rel
+	case rel == "":
+		return s.space
+	}
+	return s.space + "/" + rel
+}
+
+// markDir records space in directory dir's space file, relative to s.dir.
+// Call with s.mu held.
+func (s *store) markDir(dir, space string) {
+	rel, _ := s.relSpace(space)
+	p := filepath.Join(s.dir, dir, spaceFile)
+	if dir == "." || rel == "" {
+		return
+	}
+	if old, err := os.ReadFile(p); err == nil && string(old) == rel { //nolint:gosec // under the -data flag
+		return
+	}
+	if _, err := os.Stat(filepath.Dir(p)); err != nil {
+		return
+	}
+	if err := atomicfile.WriteFile(p, []byte(rel)); err != nil {
+		log.Print(err)
+	}
+}
+
+// removeDir removes directory dir, relative to s.dir, if it holds nothing
+// but its space file.
+func (s *store) removeDir(dir string) {
+	if dir == "." || dir == "" {
+		return
+	}
+	root, err := os.OpenRoot(s.dir)
+	if err != nil {
+		return
+	}
+	defer root.Close() //nolint:errcheck
+	entries, err := fs.ReadDir(root.FS(), filepath.ToSlash(dir))
+	if err == nil && len(entries) == 1 && entries[0].Name() == spaceFile {
+		_ = root.Remove(filepath.Join(dir, spaceFile))
+	}
+	_ = root.Remove(dir) // fails while not empty
 }
 
 // images lists the images of s, newest first.
@@ -192,10 +244,10 @@ func stemTaken(names []string, stem, except string) bool {
 	})
 }
 
-// addImage stores image data in dir, relative to s.dir, named after file,
-// with -2, -3, … on collisions, unless dir has the same image already. It
-// returns the image's name. Call with s.mu held.
-func (s *store) addImage(dir, file string, data []byte) (string, error) {
+// addImage stores image data in dir, relative to s.dir, the directory of
+// space, named after file, with -2, -3, … on collisions, unless dir has the
+// same image already. It returns the image's name. Call with s.mu held.
+func (s *store) addImage(dir, space, file string, data []byte) (string, error) {
 	ext, ok := imageTypes[http.DetectContentType(data)]
 	if !ok {
 		return "", errBadImage
@@ -227,7 +279,11 @@ func (s *store) addImage(dir, file string, data []byte) (string, error) {
 	if err := root.MkdirAll(dir, 0o700); err != nil {
 		return "", err
 	}
-	return stem + ext, writeFile(root, path.Join(filepath.ToSlash(dir), stem+ext), data)
+	if err := writeFile(root, path.Join(filepath.ToSlash(dir), stem+ext), data); err != nil {
+		return "", err
+	}
+	s.markDir(dir, space)
+	return stem + ext, nil
 }
 
 // imageFile returns the path, relative to s.dir, of image name in space, if
@@ -241,12 +297,16 @@ func (s *store) imageFile(space, name string) (string, bool) {
 	if _, ok := s.relSpace(space); !ok {
 		return "", false
 	}
-	rel := filepath.Join(s.dir, s.dirOf(space), name)
-	if fi, err := os.Lstat(rel); err != nil || !fi.Mode().IsRegular() {
+	root, err := os.OpenRoot(s.dir)
+	if err != nil {
 		return "", false
 	}
-	rel, err := filepath.Rel(s.dir, rel)
-	return rel, err == nil
+	defer root.Close() //nolint:errcheck
+	rel := filepath.Join(s.dirOf(space), name)
+	if fi, err := root.Lstat(rel); err != nil || !fi.Mode().IsRegular() {
+		return "", false
+	}
+	return rel, true
 }
 
 // findImage opens the first image called name in the user's directories,
@@ -440,7 +500,7 @@ func (v *view) putImage(id, file string, data []byte) (string, []string, error) 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	dir, _ := s.noteDir(id)
-	name, err := s.addImage(dir, file, data)
+	name, err := s.addImage(dir, s.notes[id].Space, file, data)
 	return name, v.audience(s), err
 }
 
@@ -452,7 +512,7 @@ func (v *view) addImage(space, file string, data []byte) (note.Image, []string, 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	dir := s.dirOf(space)
-	name, err := s.addImage(dir, file, data)
+	name, err := s.addImage(dir, space, file, data)
 	if err != nil {
 		return note.Image{}, nil, err
 	}
@@ -502,9 +562,10 @@ func (v *view) moveImage(from note.Image, to, stem string) (note.Image, []string
 	if err := moveFile(filepath.Join(src.dir, rel), filepath.Join(dst.dir, out)); err != nil {
 		return note.Image{}, nil, err
 	}
-	if d := filepath.Dir(rel); d != "." {
-		_ = os.Remove(filepath.Join(src.dir, d)) // fails while not empty
-	}
+	dst.mu.Lock()
+	dst.markDir(dir, to)
+	dst.mu.Unlock()
+	src.removeDir(filepath.Dir(rel))
 	users := union(v.audience(src), v.audience(dst))
 	users = union(users, v.repoint(note.Image{Space: from.Space, Name: from.Name}, img))
 	img, _, err = v.imageInfo(dst, out, img)
@@ -570,14 +631,12 @@ func (v *view) deleteImage(space, name string) ([]string, error) {
 	if err := os.Remove(filepath.Join(s.dir, rel)); err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return nil, err
 	}
-	if d := filepath.Dir(rel); d != "." {
-		_ = os.Remove(filepath.Join(s.dir, d)) // fails while not empty
-	}
+	s.removeDir(filepath.Dir(rel))
 	return v.audience(s), nil
 }
 
 // migrateAssets moves the images of the former Assets space, in .assets,
-// into the space Assets, those of its subspaces into Assets-<subspace>,
+// into the space Assets, those of its subspaces into Assets/<subspace>,
 // unless the user has the same image already, uploaded to a note.
 func (s *store) migrateAssets() error {
 	const assetDir = ".assets"
@@ -615,9 +674,9 @@ func (s *store) migrateAssets() error {
 		if sum := sha256.Sum256(data); !have[sum] {
 			space := "Assets"
 			if sub := path.Dir(rel); sub != "." {
-				space += "-" + sub
+				space += "/" + sub
 			}
-			if _, err := s.addImage(s.spaceDir(space), d.Name(), data); err != nil {
+			if _, err := s.addImage(s.dirOf(space), space, d.Name(), data); err != nil {
 				return err
 			}
 			have[sum] = true

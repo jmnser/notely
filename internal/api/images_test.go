@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -149,6 +150,15 @@ func TestMoveImages(t *testing.T) {
 	if w := request(t, h, http.MethodGet, "/api/images/Art/sky.png", ""); w.Code != http.StatusOK {
 		t.Errorf("get from a space without notes: %d", w.Code)
 	}
+	// A subspace without notes keeps its path, which its directory name loses.
+	request(t, h, http.MethodPost, "/api/images?space=Art/Old&name=old.png", string(pngOf(t, 3)))
+	if !slices.ContainsFunc(listImages(t, h), func(i note.Image) bool { return i.Space == "Art/Old" && i.Name == "old.png" }) {
+		t.Errorf("subspace lost: %+v", listImages(t, h))
+	}
+	request(t, h, http.MethodDelete, "/api/images/Art/Old/old.png", "")
+	if _, err := os.Stat(filepath.Join(dir, "Art-Old")); err == nil {
+		t.Error("emptied subspace directory left")
+	}
 
 	// Renaming and moving points the references of all notes to the image.
 	request(t, h, http.MethodPut, "/api/notes/b", `{"title":"b","body":"![x](work/my-photo-1.png) ![y](Art/sky.png)"}`)
@@ -228,6 +238,15 @@ func TestMoveNoteCarriesImages(t *testing.T) {
 		writeNote(t, dir, f, "img")
 	}
 	put("a", "home", "![](own.png) ![](shared.png) ![](/top.png)")
+	put("b", "work/sub", "![](/work/shared.png)") // its images left in work: the space keeps its path
+	writeNote(t, dir, "work-sub/x.png", "img")
+	put("b", "work/sub", "![](/work/shared.png)")
+	if err := s.delete("b"); err != nil {
+		t.Fatal(err)
+	}
+	if list, _ := s.images(); !slices.ContainsFunc(list, func(i note.Image) bool { return i.Space == "work/sub" }) {
+		t.Errorf("images without notes: %+v", list)
+	}
 	for f, want := range map[string]bool{
 		"home/own.png": true, "work/own.png": false, // used by a only: moved
 		"home/shared.png": true, "work/shared.png": true, // also used by b: copied
@@ -260,7 +279,7 @@ func TestMigrateAssets(t *testing.T) {
 		}
 	}
 	list, err := s.images()
-	if err != nil || len(list) != 3 {
+	if err != nil || len(list) != 3 || !slices.ContainsFunc(list, func(i note.Image) bool { return i.Space == "Assets/icons" }) {
 		t.Errorf("images = %+v, %v", list, err)
 	}
 }
