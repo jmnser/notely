@@ -23,6 +23,8 @@ func TestParseImageRef(t *testing.T) {
 		{"Flow.excalidraw", "Work", "", "", false},
 		{"https://example.com/a.png", "", "", "", false},
 		{"//example.com/a.png", "", "", "", false},
+		{"mailto:a.png", "", "", "", false},
+		{"/Work:2024/a.png", "", "Work:2024", "a.png", true},
 	} {
 		space, name, ok := ParseImageRef(c.dest, c.space)
 		if space != c.wantSpace || name != c.wantName || ok != c.ok {
@@ -37,6 +39,8 @@ func TestImageRef(t *testing.T) {
 		{"Work", "", "/a.png"},
 		{"", "Work/Projects", "Work/Projects/a.png"},
 		{"", "My Space", "<My Space/a.png>"},
+		{"", "Work: 2024", "</Work: 2024/a.png>"},
+		{"", "a:b", "/a:b/a.png"},
 	} {
 		got := ImageRef(c.from, c.space, "a.png")
 		if got != c.want {
@@ -60,5 +64,17 @@ func TestRewriteImageRefs(t *testing.T) {
 	}
 	if _, changed := RewriteImageRefs(body, "Home", Image{Space: "Home", Name: "x.png"}, Image{Name: "y.png"}); changed {
 		t.Error("changed without references")
+	}
+}
+
+func TestImageRefsSkipCode(t *testing.T) {
+	body := "![x][1]\n\n[1]: a.png\n\n`![](a.png)`\n\n```\n![](a.png)\n```\n\n    ![](a.png)\n\n![](a.png)\n"
+	if refs := ImageRefs(body, "W"); len(refs) != 2 {
+		t.Errorf("refs = %v", refs)
+	}
+	got, _ := RewriteImageRefs(body, "W", Image{Space: "W", Name: "a.png"}, Image{Space: "W", Name: "b.png"})
+	want := strings.Replace(body[:strings.LastIndex(body, "a.png")]+"b.png)\n", "[1]: a.png", "[1]: b.png", 1)
+	if got != want {
+		t.Errorf("got %q\nwant %q", got, want)
 	}
 }

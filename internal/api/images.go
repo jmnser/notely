@@ -355,47 +355,51 @@ func (s *store) uses(img note.Image, except string) bool {
 	return false
 }
 
-// carryImages brings the images that the body of note id, now in space,
+// carryImages brings the images that body, of note id now in space,
 // references there along from directory from, of any store, to directory
 // to, relative to s.dir, when the note moves there: moved if no other note
-// of src, the store of from if it is s, still uses them in space was, else
-// copied. Call with s.mu held.
-func (s *store) carryImages(id, body, space, from, to, was string, src *store) {
+// of the former space was uses them and from is in s, else copied. An image
+// of the same name but other content in to makes it take another name; the
+// returned body references it so. Call with s.mu held.
+func (s *store) carryImages(id, body, space, from, to, was string, src *store) string {
 	if filepath.Clean(from) == filepath.Join(s.dir, to) {
-		return
+		return body
 	}
 	root, err := os.OpenRoot(s.dir)
 	if err != nil {
 		log.Print(err)
-		return
+		return body
 	}
 	defer root.Close() //nolint:errcheck
 	for _, img := range slices.Compact(slices.SortedFunc(slices.Values(note.ImageRefs(body, space)), compareImages)) {
 		if img.Space != space {
 			continue // referenced by space path
 		}
-		dst := path.Join(filepath.ToSlash(to), img.Name)
-		if _, err := root.Lstat(dst); err == nil {
-			continue
-		}
 		p := filepath.Join(from, img.Name)
-		if src == s && !s.uses(note.Image{Space: was, Name: img.Name}, id) {
-			if err := os.Rename(p, filepath.Join(s.dir, dst)); err != nil && !errors.Is(err, fs.ErrNotExist) {
-				log.Printf("move image %s: %v", p, err)
-			}
-			continue
-		}
 		data, err := os.ReadFile(p) //nolint:gosec // under the -data flag
 		if errors.Is(err, fs.ErrNotExist) {
 			continue
+		} else if err != nil {
+			log.Printf("carry image %s: %v", p, err)
+			continue
 		}
-		if err == nil {
-			err = writeFile(root, dst, data)
+		name := img.Name
+		if old, err := root.ReadFile(path.Join(filepath.ToSlash(to), name)); err != nil || !bytes.Equal(old, data) {
+			if name, err = s.addImage(to, space, name, data); err != nil {
+				log.Printf("carry image %s: %v", p, err)
+				continue
+			}
 		}
-		if err != nil {
-			log.Printf("copy image %s: %v", p, err)
+		if name != img.Name {
+			body, _ = note.RewriteImageRefs(body, space, img, note.Image{Space: space, Name: name})
+		}
+		if src == s && !s.uses(note.Image{Space: was, Name: img.Name}, id) {
+			if err := os.Remove(p); err != nil {
+				log.Print(err)
+			}
 		}
 	}
+	return body
 }
 
 func compareImages(a, b note.Image) int {
@@ -404,25 +408,26 @@ func compareImages(a, b note.Image) int {
 
 // importImages copies the images body references from note id's directory in
 // store from, or anywhere in it for references of the former layout, to its
-// directory in s, when the note moves between stores.
-func (s *store) importImages(id, body string, from *store) {
+// directory in s, when the note moves between stores. It returns body with
+// the references to images that took another name changed.
+func (s *store) importImages(id, body string, from *store) string {
 	from.mu.Lock()
 	dir, ok := from.noteDir(id)
 	from.mu.Unlock()
 	if !ok {
-		return
+		return body
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	to, ok := s.noteDir(id)
 	if !ok {
-		return
+		return body
 	}
-	s.carryImages(id, body, s.notes[id].Space, filepath.Join(from.dir, dir), to, "", from)
+	body = s.carryImages(id, body, s.notes[id].Space, filepath.Join(from.dir, dir), to, "", from)
 	root, err := os.OpenRoot(s.dir)
 	if err != nil {
 		log.Print(err)
-		return
+		return body
 	}
 	defer root.Close() //nolint:errcheck
 	for _, img := range note.ImageRefs(body, s.notes[id].Space) {
@@ -443,6 +448,7 @@ func (s *store) importImages(id, body string, from *store) {
 			log.Printf("copy image %s: %v", img.Name, err)
 		}
 	}
+	return body
 }
 
 // noteDir returns the directory, relative to s.dir, of note id. Call with s.mu held.
@@ -474,15 +480,23 @@ func (v *view) image(space, name string) (*store, string, bool) {
 	return nil, "", false
 }
 
-// images lists the images of all stores, newest first.
+// images lists the images of all stores, newest first. Of the same path
+// in a shared space and the user's own store, only the shared one is
+// reachable and listed.
 func (v *view) images() ([]note.Image, error) {
 	var list []note.Image
-	for _, s := range v.stores() {
+	seen := map[string]bool{}
+	for _, s := range append(v.stores()[1:], v.own) {
 		l, err := s.images()
 		if err != nil {
 			return nil, err
 		}
-		list = append(list, l...)
+		for _, img := range l {
+			if p := strings.ToLower(img.Path()); !seen[p] {
+				seen[p] = true
+				list = append(list, img)
+			}
+		}
 	}
 	slices.SortStableFunc(list, func(a, b note.Image) int { return b.Uploaded.Compare(a.Uploaded) })
 	return list, nil
@@ -737,7 +751,7 @@ func serveImage(w http.ResponseWriter, r *http.Request, f *os.File, name string)
 	}
 	v := version(info)
 	cache := "private, no-cache"
-	if r.URL.Query().Get("v") == v || hashName.MatchString(name) { // a hash name is its content
+	if r.URL.Query().Get("v") == v {
 		cache = "private, max-age=31536000, immutable"
 	}
 	for typ, ext := range imageTypes {

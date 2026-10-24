@@ -1,6 +1,8 @@
 package api
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"log"
@@ -77,15 +79,16 @@ func newHandler(viewOf func(*http.Request) *view, ev *events) http.Handler {
 		writeJSON(w, names)
 	})
 	byNote("GET /api/notes/{id}/images/{name}", func(s *store, w http.ResponseWriter, r *http.Request) {
-		name := r.PathValue("name")
 		s.mu.Lock()
-		dir, _ := s.noteDir(r.PathValue("id"))
+		n := s.notes[r.PathValue("id")]
 		s.mu.Unlock()
-		if !note.ImageName.MatchString(name) {
+		name := r.PathValue("name")
+		rel, ok := s.imageFile(n.Space, name)
+		if !ok {
 			http.NotFound(w, r)
 			return
 		}
-		f, err := os.Open(filepath.Join(s.dir, dir, name)) //nolint:gosec // a checked name under the -data flag
+		f, err := os.Open(filepath.Join(s.dir, rel)) //nolint:gosec // a checked regular file under the -data flag
 		if err != nil {
 			imageError(w, r, err)
 			return
@@ -107,12 +110,21 @@ func newHandler(viewOf func(*http.Request) *view, ev *events) http.Handler {
 			return
 		}
 		q := r.URL.Query()
-		img, users, err := v.addImage(note.SpacePath(q.Get("space")), q.Get("name"), data)
+		file, legacy := q.Get("name"), !q.Has("name")
+		if legacy { // app versions before images moved next to notes: named by hash, referenced as /images/<name>
+			sum := sha256.Sum256(data)
+			file = hex.EncodeToString(sum[:16])
+		}
+		img, users, err := v.addImage(note.SpacePath(q.Get("space")), file, data)
 		if err != nil {
 			imageError(w, r, err)
 			return
 		}
 		ev.notify(users, r.Header.Get(clientHeader))
+		if legacy {
+			writeJSON(w, map[string]string{"path": "/images/" + img.Name})
+			return
+		}
 		writeJSON(w, img)
 	})
 	handle("GET /api/images/{path...}", func(v *view, w http.ResponseWriter, r *http.Request) {

@@ -214,9 +214,17 @@ func TestOldImageRefs(t *testing.T) {
 	// The former layout's references, /images/<hash>, find the image anywhere.
 	const hash = "0123456789abcdef0123456789abcdef.png"
 	writeNote(t, dir, "work/"+hash, string(img))
-	if w := request(t, h, http.MethodGet, "/api/images/"+hash, ""); w.Code != http.StatusOK ||
-		!strings.Contains(w.Header().Get("Cache-Control"), "immutable") {
+	if w := request(t, h, http.MethodGet, "/api/images/"+hash, ""); w.Code != http.StatusOK {
 		t.Errorf("old get: %d %v", w.Code, w.Header())
+	}
+	// Uploads of app versions from before images moved next to notes.
+	w := request(t, h, http.MethodPost, "/api/images", string(pngOf(t, 9)))
+	var out struct{ Path string }
+	if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil || !strings.HasPrefix(out.Path, "/images/") {
+		t.Fatalf("old upload: %d %s", w.Code, w.Body)
+	}
+	if w := request(t, h, http.MethodGet, "/api"+out.Path, ""); w.Code != http.StatusOK {
+		t.Errorf("old upload get: %d", w.Code)
 	}
 }
 
@@ -234,22 +242,25 @@ func TestMoveNoteCarriesImages(t *testing.T) {
 	}
 	put("a", "work", "![](own.png) ![](shared.png) ![](/top.png)")
 	put("b", "work", "![](shared.png)")
-	for _, f := range []string{"work/own.png", "work/shared.png", "work/unused.png", "top.png"} {
-		writeNote(t, dir, f, "img")
+	for i, f := range []string{"work/own.png", "work/shared.png", "work/unused.png", "top.png", "home/shared.png"} {
+		writeNote(t, dir, f, string(pngOf(t, uint8(i))))
 	}
 	put("a", "home", "![](own.png) ![](shared.png) ![](/top.png)")
 	put("b", "work/sub", "![](/work/shared.png)") // its images left in work: the space keeps its path
-	writeNote(t, dir, "work-sub/x.png", "img")
+	writeNote(t, dir, "work-sub/x.png", string(pngData(t)))
 	put("b", "work/sub", "![](/work/shared.png)")
 	if err := s.delete("b"); err != nil {
 		t.Fatal(err)
+	}
+	if n, _ := s.get("a"); n.Body != "![](own.png) ![](shared-2.png) ![](/top.png)" {
+		t.Errorf("a: %q", n.Body)
 	}
 	if list, _ := s.images(); !slices.ContainsFunc(list, func(i note.Image) bool { return i.Space == "work/sub" }) {
 		t.Errorf("images without notes: %+v", list)
 	}
 	for f, want := range map[string]bool{
 		"home/own.png": true, "work/own.png": false, // used by a only: moved
-		"home/shared.png": true, "work/shared.png": true, // also used by b: copied
+		"home/shared.png": true, "work/shared.png": true, "home/shared-2.png": true, // also used by b: copied, under another name
 		"home/top.png": false, "top.png": true, "work/unused.png": true,
 	} {
 		if _, err := os.Stat(filepath.Join(dir, f)); (err == nil) != want {
@@ -281,5 +292,30 @@ func TestMigrateAssets(t *testing.T) {
 	list, err := s.images()
 	if err != nil || len(list) != 3 || !slices.ContainsFunc(list, func(i note.Image) bool { return i.Space == "Assets/icons" }) {
 		t.Errorf("images = %+v, %v", list, err)
+	}
+}
+
+func TestRenameSpaceMovesSharedImages(t *testing.T) {
+	dir := t.TempDir()
+	s, err := openStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{"n1", "n2"} {
+		if _, err := s.put(note.Note{ID: id, Title: id, Space: "Old", Body: "![](a.png)"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeNote(t, dir, "Old/a.png", string(pngData(t)))
+	for _, id := range []string{"n1", "n2"} { // one at a time, as the app pushes them
+		if _, err := s.put(note.Note{ID: id, Title: id, Space: "New", Body: "![](a.png)"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(dir, "Old")); err == nil {
+		t.Error("the old space is left")
+	}
+	if list, _ := s.images(); len(list) != 1 || list[0].Space != "New" {
+		t.Errorf("images = %+v", list)
 	}
 }

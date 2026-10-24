@@ -125,8 +125,13 @@ func (v *view) put(n note.Note) (note.Note, []string, error) {
 		return n, nil, err
 	}
 	users := v.audience(to)
-	if cur != nil && cur != to {
-		to.importImages(n.ID, n.Body, cur)
+	if cur != nil && cur != to && n.Kind != note.Drawing {
+		if body := to.importImages(n.ID, n.Body, cur); body != n.Body {
+			n.Body = body
+			if n, err = to.put(n); err != nil {
+				return n, nil, err
+			}
+		}
 	}
 	for _, s := range v.stores() {
 		if _, ok := s.get(n.ID); ok && s != to {

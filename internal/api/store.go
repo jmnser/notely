@@ -115,6 +115,10 @@ func (s *store) put(n note.Note) (note.Note, error) {
 	old, exists := s.paths[n.ID]
 	was := s.notes[n.ID].Space
 	rel := s.pathFor(n, old)
+	moved := exists && old != rel && !s.sameFile(old, rel)
+	if moved && n.Kind != note.Drawing {
+		n.Body = s.carryImages(n.ID, n.Body, n.Space, filepath.Join(s.dir, filepath.Dir(old)), filepath.Dir(rel), was, s)
+	}
 	data, err := encode(n)
 	if err != nil {
 		return note.Note{}, err
@@ -122,8 +126,7 @@ func (s *store) put(n note.Note) (note.Note, error) {
 	if err := s.write(rel, data); err != nil {
 		return note.Note{}, err
 	}
-	if exists && old != rel && !s.sameFile(old, rel) {
-		s.carryImages(n.ID, n.Body, n.Space, filepath.Join(s.dir, filepath.Dir(old)), filepath.Dir(rel), was, s)
+	if moved {
 		if err := s.remove(old); err != nil {
 			log.Print(err)
 		}

@@ -1,6 +1,7 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"net/http"
 	"os"
@@ -232,5 +233,27 @@ func TestLoadUsersSpaces(t *testing.T) {
 		if tt.ok && (len(users) != 2 || !slices.Equal(spaces["ann"], []string{"Family"}) || spaces["bob"] != nil) {
 			t.Errorf("%s: %v %v", tt.json, users, spaces)
 		}
+	}
+}
+
+func TestSharedImages(t *testing.T) {
+	s, dir, signOn := sharedServer(t)
+	ann, bob := signOn("ann"), signOn("bob")
+	writeNote(t, dir, "users/ann/Family/a.png", string(pngOf(t, 1))) // Ann's own, from before sharing
+	w := request(t, bob, http.MethodPost, "/api/images?space=Family&name=a.png", string(pngOf(t, 2)))
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"space":"Family"`) {
+		t.Fatalf("upload: %d %s", w.Code, w.Body)
+	}
+	if _, err := os.Stat(filepath.Join(s.shared["Family"].store.dir, "a.png")); err != nil {
+		t.Errorf("not in the shared space: %v", err)
+	}
+	if list := listImages(t, ann); len(list) != 1 || list[0].Path() != "Family/a.png" {
+		t.Errorf("ann sees %+v", list)
+	}
+	if w := request(t, ann, http.MethodGet, "/api/images/Family/a.png", ""); !bytes.Equal(w.Body.Bytes(), pngOf(t, 2)) {
+		t.Errorf("ann gets: %d", w.Code)
+	}
+	if list := listImages(t, signOn("carl")); len(list) != 0 {
+		t.Errorf("carl sees %+v", list)
 	}
 }

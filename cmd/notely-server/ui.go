@@ -1331,7 +1331,9 @@ func (u *ui) sync(app.Context) {
 			}
 			u.deleted = u.deleted[len(deleted):]
 			u.notes = note.Merge(remote, u.notes, u.dirty, u.deleted)
-			u.loadImages(nil) // other apps' image changes come as note events too
+			if len(push) == 0 && len(deleted) == 0 { // not after own edits, which change no images
+				u.loadImages(nil)
+			}
 			if _, ok := u.dirty[u.current]; !ok {
 				u.show(u.current, u.from) // show changes made elsewhere
 			}

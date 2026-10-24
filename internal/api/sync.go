@@ -412,11 +412,6 @@ func openRepo(dir, remote string) (*git.Repository, error) {
 
 // copyFile copies rel of from to out in to, unless to holds it already.
 func copyFile(from, to *os.Root, rel, out string) error {
-	if hashName.MatchString(path.Base(rel)) {
-		if _, err := to.Stat(out); err == nil {
-			return nil // a hash name is its content
-		}
-	}
 	data, err := from.ReadFile(rel)
 	if err != nil {
 		return err
