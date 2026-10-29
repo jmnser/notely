@@ -478,6 +478,9 @@ main {
   font-weight: 500;
   line-height: 24px;
 }
+#body.vim-normal {
+  box-shadow: inset 0 0 0 2px var(--md-primary);
+}
 #title::placeholder,
 #body::placeholder {
   color: var(--md-on-surface-variant);

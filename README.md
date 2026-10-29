@@ -5,6 +5,7 @@ Self-hosted, offline-first Markdown notes, organised in spaces. A web app you ca
 - Markdown with task lists, Mermaid diagrams and images
 - Excalidraw drawings, on their own or embedded in notes
 - Spaces and sub-spaces, pinning and search
+- Optional Vim keys in the web editor
 - Works offline; changes sync when the server is reachable
 - Multiple users, with spaces shared between them
 - Per-user backup to a git repository
