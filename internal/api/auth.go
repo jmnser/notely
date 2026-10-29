@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/jmnser/notely/internal/note"
+	"github.com/jmnser/notely/internal/notefile"
 )
 
 const (
@@ -118,7 +119,7 @@ func (e *userEntry) UnmarshalJSON(data []byte) error {
 // validShare reports whether name works as a shared space: one space name
 // that is its own directory name.
 func validShare(name string) bool {
-	return name != "" && !strings.Contains(name, "/") && note.SpacePath(name) == name && fileName(name, "") == name
+	return name != "" && !strings.Contains(name, "/") && note.SpacePath(name) == name && notefile.Name(name, "") == name
 }
 
 // duplicateKey returns a key the JSON object data has twice; json.Unmarshal

@@ -7,17 +7,14 @@ import (
 	"log"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/jmnser/notely/internal/atomicfile"
 	"github.com/jmnser/notely/internal/note"
+	"github.com/jmnser/notely/internal/notefile"
 )
-
-// noteExt is the extension of note files.
-const noteExt = ".md"
 
 // store keeps a user's notes in memory and persists each one as
 // <dir>/<space>/<title>.md, drawings as <title>.excalidraw, with the images
@@ -45,7 +42,7 @@ func openStore(dir string) (*store, error) {
 				return filepath.SkipDir
 			}
 			return nil
-		case d.IsDir() || !noteFile(path):
+		case d.IsDir() || !notefile.IsNote(path):
 			return nil
 		}
 		rel, err := filepath.Rel(dir, path)
@@ -56,7 +53,7 @@ func openStore(dir string) (*store, error) {
 		if err != nil {
 			return err
 		}
-		n, err := decode(data, filepath.Ext(path))
+		n, err := notefile.Decode(data, filepath.Ext(path))
 		if err != nil {
 			log.Printf("skip %s: %v", rel, err)
 			return nil
@@ -119,7 +116,7 @@ func (s *store) put(n note.Note) (note.Note, error) {
 	if moved && n.Kind != note.Drawing {
 		n.Body = s.carryImages(n.ID, n.Body, n.Space, filepath.Join(s.dir, filepath.Dir(old)), filepath.Dir(rel), was, s)
 	}
-	data, err := encode(n)
+	data, err := notefile.Encode(n)
 	if err != nil {
 		return note.Note{}, err
 	}
@@ -157,15 +154,15 @@ func (s *store) delete(id string) error {
 // else the first free <space>/<title>[-N].md (.excalidraw for drawings). Names
 // compare case-insensitively, as on macOS and Windows file systems.
 func (s *store) pathFor(n note.Note, old string) string {
-	base, ext := fileName(n.Title, "untitled"), extension(n.Kind)
+	base, ext := notefile.Name(n.Title, "untitled"), notefile.Ext(n.Kind)
 	space := n.Space
 	if s.space != "" {
 		_, space, _ = strings.Cut(space, "/")
 	}
 	if space != "" {
-		base = filepath.Join(s.spaceDir(fileName(space, "unnamed")), base)
+		base = filepath.Join(s.spaceDir(notefile.Name(space, "unnamed")), base)
 	}
-	if numbered(old, base, ext) {
+	if notefile.Numbered(old, base, ext) {
 		return old
 	}
 	used := map[string]bool{}
@@ -202,23 +199,6 @@ func (s *store) spaceDir(dir string) string {
 	}
 }
 
-// numbered reports whether path is base+ext or base-N+ext.
-func numbered(path, base, ext string) bool {
-	rest, ok := strings.CutPrefix(path, base)
-	if !ok {
-		return false
-	}
-	if rest, ok = strings.CutSuffix(rest, ext); !ok {
-		return false
-	}
-	if rest == "" {
-		return true
-	}
-	num, ok := strings.CutPrefix(rest, "-")
-	i, err := strconv.Atoi(num)
-	return ok && err == nil && i > 1 && strconv.Itoa(i) == num
-}
-
 // write replaces rel atomically and durably.
 func (s *store) write(rel string, data []byte) error {
 	path := filepath.Join(s.dir, rel)
@@ -244,130 +224,4 @@ func (s *store) sameFile(a, b string) bool {
 	fa, errA := os.Stat(filepath.Join(s.dir, a))
 	fb, errB := os.Stat(filepath.Join(s.dir, b))
 	return errA == nil && errB == nil && os.SameFile(fa, fb)
-}
-
-const maxName = 100 // bytes
-
-// fileName turns s into a readable file name that is safe on all platforms,
-// or returns fallback if nothing is left.
-func fileName(s, fallback string) string {
-	s = strings.Map(func(r rune) rune {
-		if r < 0x20 || r == 0x7f || strings.ContainsRune(`/\:*?"<>|`, r) {
-			return '-'
-		}
-		return r
-	}, s)
-	if len(s) > maxName {
-		s = strings.ToValidUTF8(s[:maxName], "")
-	}
-	if s = strings.Trim(s, " ."); s == "" {
-		return fallback
-	}
-	if stem, ext, ok := strings.Cut(s, "."); reserved[strings.ToUpper(strings.TrimRight(stem, " "))] {
-		s = stem + "-"
-		if ok {
-			s += "." + ext
-		}
-	}
-	return s
-}
-
-// reserved lists the device names Windows does not allow as file names, with
-// or without an extension.
-var reserved = map[string]bool{
-	"CON": true, "PRN": true, "AUX": true, "NUL": true,
-	"COM1": true, "COM2": true, "COM3": true, "COM4": true, "COM5": true,
-	"COM6": true, "COM7": true, "COM8": true, "COM9": true,
-	"LPT1": true, "LPT2": true, "LPT3": true, "LPT4": true, "LPT5": true,
-	"LPT6": true, "LPT7": true, "LPT8": true, "LPT9": true,
-}
-
-// encode renders n as the content of its file.
-func encode(n note.Note) ([]byte, error) {
-	if n.Kind == note.Drawing {
-		return encodeDrawing(n)
-	}
-	return encodeMarkdown(n), nil
-}
-
-// decode parses a file written by encode; ext is the file's extension.
-func decode(data []byte, ext string) (note.Note, error) {
-	var n note.Note
-	var err error
-	if ext == drawingExt {
-		n, err = decodeDrawing(data)
-	} else {
-		n, err = decodeMarkdown(data)
-	}
-	if err == nil && !validID.MatchString(n.ID) {
-		err = fmt.Errorf("invalid id %q", n.ID)
-	}
-	return n, err
-}
-
-// encodeMarkdown renders n as Markdown with its fields in YAML front matter.
-func encodeMarkdown(n note.Note) []byte {
-	var b strings.Builder
-	b.WriteString("---\n")
-	fmt.Fprintf(&b, "id: %s\n", n.ID)
-	fmt.Fprintf(&b, "title: %s\n", strconv.Quote(n.Title))
-	if n.Space != "" {
-		fmt.Fprintf(&b, "space: %s\n", strconv.Quote(n.Space))
-	}
-	if n.Pinned {
-		b.WriteString("pinned: true\n")
-	}
-	fmt.Fprintf(&b, "updated: %s\n", n.Updated.Format(time.RFC3339Nano))
-	b.WriteString("---\n")
-	b.WriteString(n.Body)
-	return []byte(b.String())
-}
-
-// decodeMarkdown parses a file written by encodeMarkdown. Unknown keys are
-// ignored.
-func decodeMarkdown(data []byte) (note.Note, error) {
-	var n note.Note
-	first, rest, _ := strings.Cut(string(data), "\n")
-	if strings.TrimSuffix(first, "\r") != "---" {
-		return n, errors.New("no front matter")
-	}
-	for {
-		line, after, found := strings.Cut(rest, "\n")
-		if line = strings.TrimSuffix(line, "\r"); line == "---" {
-			rest = after
-			break
-		}
-		if !found {
-			return n, errors.New("unterminated front matter")
-		}
-		rest = after
-		key, value, _ := strings.Cut(line, ":")
-		value = strings.TrimSpace(value)
-		switch strings.TrimSpace(key) {
-		case "id":
-			n.ID = value
-		case "title":
-			n.Title = unquote(value)
-		case "space":
-			n.Space = unquote(value)
-		case "pinned":
-			n.Pinned = value == "true"
-		case "updated":
-			t, err := time.Parse(time.RFC3339Nano, value)
-			if err != nil {
-				return n, fmt.Errorf("updated: %w", err)
-			}
-			n.Updated = t
-		}
-	}
-	n.Body = rest
-	return n, nil
-}
-
-// unquote reads a double-quoted or plain YAML scalar.
-func unquote(s string) string {
-	if u, err := strconv.Unquote(s); err == nil {
-		return u
-	}
-	return s
 }

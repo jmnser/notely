@@ -21,6 +21,7 @@ import (
 
 	"github.com/jmnser/notely/internal/atomicfile"
 	"github.com/jmnser/notely/internal/note"
+	"github.com/jmnser/notely/internal/notefile"
 )
 
 // Images are files in the space directories, next to the notes, named by a
@@ -106,7 +107,7 @@ func (s *store) dirOf(space string) string {
 	if rel == "" {
 		return "."
 	}
-	return s.spaceDir(fileName(rel, "unnamed"))
+	return s.spaceDir(notefile.Name(rel, "unnamed"))
 }
 
 // spaceFile holds, in a space directory with images, the space's path below
