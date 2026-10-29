@@ -1013,12 +1013,13 @@ func (u *ui) replace(el app.Value, v string, from, to int, s string) string {
 	return v
 }
 
-// normalKey handles a key in the editor's Vim Normal mode. Shortcuts and keys
-// that only move, such as the arrow keys, keep their default.
+// normalKey handles a key in the editor's Vim Normal mode. Shortcuts, Shift
+// with an arrow key and other keys without a Vim meaning keep their default.
 func (u *ui) normalKey(ctx app.Context, e app.Event) {
 	k := e.Get("key").String()
 	switch {
-	case e.Get("isComposing").Bool(), e.Get("metaKey").Bool(), e.Get("altKey").Bool():
+	case e.Get("isComposing").Bool(), e.Get("metaKey").Bool(), e.Get("altKey").Bool(),
+		e.Get("shiftKey").Bool() && strings.HasPrefix(k, "Arrow"):
 		return
 	case e.Get("ctrlKey").Bool():
 		if k != "r" {
@@ -1051,9 +1052,9 @@ func (u *ui) normalKey(ctx app.Context, e app.Event) {
 	u.vimCursor(el, v, a.cursor)
 }
 
-// beforeInput keeps the editor's text in Vim Normal mode from input without
-// a usable key name, such as on Android, and from menu paste. Undo and redo
-// stay.
+// beforeInput keeps the editor's text in Vim Normal mode from input that
+// skips normalKey, such as menu paste. Undo and redo stay. Browsers don't let
+// IME composition be blocked, so Vim keys need a hardware keyboard.
 func (u *ui) beforeInput(_ app.Context, e app.Event) {
 	if u.vimOn && !u.vim.insert && !strings.HasPrefix(e.Get("inputType").String(), "history") {
 		e.PreventDefault()
@@ -1072,7 +1073,7 @@ func (u *ui) vimCursor(el app.Value, v string, c int) {
 }
 
 func (u *ui) toggleVim(ctx app.Context, _ app.Event) {
-	if u.vimOn { // drop the block cursor
+	if u.vimOn && !u.vim.insert { // drop the block cursor
 		el := app.Window().GetElementByID("body")
 		el.Call("setSelectionRange", el.Get("selectionStart"), el.Get("selectionStart"))
 	}
@@ -1098,21 +1099,13 @@ func (u *ui) focusBody() {
 func (u *ui) insertText(s string) {
 	el := app.Window().GetElementByID("body")
 	el.Call("focus")
-	if u.vimOn && !u.vim.insert { // insert before the block cursor, not over it
-		el.Call("setSelectionRange", el.Get("selectionStart"), el.Get("selectionStart"))
-	}
-	// execCommand keeps the browser's undo history and fires the input event.
-	if app.Window().Get("document").Call("execCommand", "insertText", false, s).Bool() {
-		return
-	}
 	v := el.Get("value").String()
 	from := byteOffset(v, el.Get("selectionStart").Int())
 	to := byteOffset(v, el.Get("selectionEnd").Int())
-	v = v[:from] + s + v[to:]
-	el.Set("value", v)
-	c := utf16Offset(v, from+len(s))
-	el.Call("setSelectionRange", c, c)
-	u.edit(func(n *note.Note) { n.Body = v })
+	if u.vimOn && !u.vim.insert { // insert before the block cursor, not over it
+		to = from
+	}
+	u.replace(el, v, from, to, s)
 }
 
 func (u *ui) startEdit(ctx app.Context, e app.Event) {
@@ -1158,6 +1151,7 @@ func (u *ui) create(space, title, kind string) {
 	if kind != note.Drawing {
 		u.editing = true
 		u.vim.reset()
+		u.vim.insert = true // a new note starts with typing
 		u.syncBack()
 	}
 	focus := "body"

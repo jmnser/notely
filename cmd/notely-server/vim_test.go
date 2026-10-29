@@ -33,6 +33,17 @@ func TestVim(t *testing.T) {
 		{"|foo bar", "dw", "|bar", false},
 		{"foo |bar\nbaz", "dw", "foo| \nbaz", false},
 		{"f|oo bar", "de", "f| bar", false},
+		{"a\n|\n  b", "dw", "a\n|  b", false},
+		{"a\n|\nb", "cw", "a\n|\nb", true},
+		{"a\n|\n\nb", "dw", "a\n|\nb", false},
+		{"|a\n\nb", "w", "a\n|\nb", false},
+		{"|a\n\nb", "ww", "a\n\n|b", false},
+		{"a\n\n|b", "b", "a\n|\nb", false},
+		{"|abc\nde\nfghi", "$jj", "abc\nde\nfgh|i", false},
+		{"|abc\nde\nfghi", "$jhj", "abc\nde\n|fghi", false},
+		{"a|b\n  c", "\r", "ab\n  |c", false},
+		{"ab\n|c", "\b", "a|b\nc", false},
+		{"a\n|b\nc", "d+", "|a", false},
 		{"fo|o bar", "de", "f|o", false},
 		{"a|bc\nd\nef", "jjk", "abc\n|d\nef", false},
 		{"a|bc\nd\nef", "jlj", "abc\nd\n|ef", false},
@@ -75,7 +86,11 @@ func TestVim(t *testing.T) {
 		s := strings.Replace(tt.in, "|", "", 1)
 		var v vim
 		for _, k := range tt.keys {
-			e := v.key(s, pos, string(k))
+			key := string(k)
+			if a, ok := map[rune]string{'\r': "Enter", '\b': "Backspace"}[k]; ok {
+				key = vimAliases[a]
+			}
+			e := v.key(s, pos, key)
 			s, pos = s[:e.from]+e.insert+s[e.to:], e.cursor
 		}
 		if got := s[:pos] + "|" + s[pos:]; got != tt.want || v.insert != tt.insert {

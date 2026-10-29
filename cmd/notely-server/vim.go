@@ -1,6 +1,7 @@
 package main
 
 import (
+	"math"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -13,7 +14,7 @@ type vim struct {
 	pending  string // keys waiting for the rest of a command, such as d or g
 	register string // last yanked or deleted text
 	linewise bool   // register holds whole lines, without the last line break
-	goal     int    // rune column j and k keep
+	goal     int    // rune column j and k keep, or -1; math.MaxInt after $
 	goalAt   int    // cursor the goal is for, or -1
 }
 
@@ -28,7 +29,7 @@ type vimEdit struct {
 
 // vimAliases maps editing keys to their Normal mode commands.
 var vimAliases = map[string]string{
-	"Backspace": "h", "Enter": "j", "ArrowLeft": "h", "ArrowDown": "j", "ArrowUp": "k", "ArrowRight": "l",
+	"Backspace": "<BS>", "Enter": "+", "ArrowLeft": "h", "ArrowDown": "j", "ArrowUp": "k", "ArrowRight": "l",
 }
 
 // motions move from byte offset pos of s.
@@ -40,6 +41,12 @@ var motions = map[string]func(s string, pos int) int{
 		return pos
 	},
 	"l": func(s string, pos int) int { return min(nextRune(s, pos), lineEnd(s, pos)) },
+	"<BS>": func(s string, pos int) int {
+		if pos > 0 {
+			return prevRune(s, pos)
+		}
+		return pos
+	},
 	"j": func(s string, pos int) int { // to the next line's start, see vim.do
 		if e := lineEnd(s, pos); e < len(s) {
 			return e + 1
@@ -49,6 +56,12 @@ var motions = map[string]func(s string, pos int) int{
 	"k": func(s string, pos int) int {
 		if st := lineStart(s, pos); st > 0 {
 			return lineStart(s, st-1)
+		}
+		return pos
+	},
+	"+": func(s string, pos int) int {
+		if e := lineEnd(s, pos); e < len(s) {
+			return firstNonBlank(s, e+1)
 		}
 		return pos
 	},
@@ -65,12 +78,14 @@ var motions = map[string]func(s string, pos int) int{
 // key handles Normal mode key k, a character or "<C-r>", with the cursor at
 // byte offset pos of s.
 func (v *vim) key(s string, pos int, k string) vimEdit {
-	e := v.do(s, clamp(s, pos), k)
+	pos = clamp(s, pos)
+	if pos != v.goalAt {
+		v.goal = -1
+	}
+	v.goalAt = -1 // set again by j, k and $
+	e := v.do(s, pos, k)
 	if !v.insert && e.cmd == "" {
 		e.cursor = clamp(s[:e.from]+e.insert+s[e.to:], e.cursor)
-	}
-	if k != "j" && k != "k" {
-		v.goalAt = -1
 	}
 	return e
 }
@@ -94,13 +109,19 @@ func (v *vim) do(s string, pos int, k string) vimEdit {
 		return v.command(s, pos, m)
 	}
 	t := f(s, pos)
-	if (m == "j" || m == "k") && t != pos {
-		if pos != v.goalAt {
+	switch {
+	case m == "$":
+		v.goal = math.MaxInt
+	case m != "j" && m != "k":
+		return vimEdit{cursor: t}
+	case t == pos:
+	default:
+		if v.goal < 0 {
 			v.goal = utf8.RuneCountInString(s[lineStart(s, pos):pos])
 		}
 		t = column(s, t, v.goal)
-		v.goalAt = clamp(s, t)
 	}
+	v.goalAt = clamp(s, t)
 	return vimEdit{cursor: t}
 }
 
@@ -163,12 +184,12 @@ func (v *vim) command(s string, pos int, m string) vimEdit {
 func (v *vim) operate(s string, pos int, op, m string) vimEdit {
 	var from, to int
 	switch m {
-	case op, "j", "k", "gg", "G":
+	case op, "j", "k", "+", "gg", "G":
 		t := pos
 		if m != op {
 			t = motions[m](s, pos)
 		}
-		if (m == "j" || m == "k") && t == pos {
+		if (m == "j" || m == "k" || m == "+") && t == pos {
 			return vimEdit{cursor: pos} // no line to take along
 		}
 		from, to = lineStart(s, min(pos, t)), lineEnd(s, max(pos, t))
@@ -182,9 +203,14 @@ func (v *vim) operate(s string, pos int, op, m string) vimEdit {
 		}
 		t := f(s, pos)
 		switch m {
-		case "w": // stay on the line
-			if end := lineEnd(s, pos); end > pos {
+		case "w": // stay on the line; an empty one is a word
+			switch end := lineEnd(s, pos); {
+			case end > pos:
 				t = min(t, end)
+			case op == "c":
+				t = pos
+			default:
+				t = min(t, pos+1)
 			}
 		case "e":
 			t = nextRune(s, t)
@@ -312,7 +338,7 @@ func wordForward(s string, pos int) int {
 			i = nextRune(s, i)
 		}
 	}
-	for i < len(s) && unicode.IsSpace(runeAt(s, i)) {
+	for i < len(s) && unicode.IsSpace(runeAt(s, i)) && (i == pos || !emptyLine(s, i)) {
 		i = nextRune(s, i)
 	}
 	return i
@@ -343,7 +369,9 @@ func runEnd(s string, pos int) int {
 func wordBack(s string, pos int) int {
 	i := pos
 	for i > 0 && unicode.IsSpace(lastRune(s[:i])) {
-		i = prevRune(s, i)
+		if i = prevRune(s, i); emptyLine(s, i) {
+			return i
+		}
 	}
 	if i == 0 {
 		return 0
@@ -353,6 +381,11 @@ func wordBack(s string, pos int) int {
 		i = prevRune(s, i)
 	}
 	return i
+}
+
+// emptyLine reports whether the line at offset i of s is empty and i its start.
+func emptyLine(s string, i int) bool {
+	return s[i] == '\n' && (i == 0 || s[i-1] == '\n')
 }
 
 func lastRune(s string) rune {
