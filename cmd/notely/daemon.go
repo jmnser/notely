@@ -83,8 +83,9 @@ type daemon struct {
 	st        *mirrorState
 	root      *os.Root
 	stateFile string
-	files     map[string]*file // found by the last scan
-	dirs      map[string]bool  // found by the last scan
+	files     map[string]*file  // found by the last scan
+	dirs      map[string]bool   // found by the last scan
+	dirSpace  map[string]string // directory → its space, of the synced files
 	// missing holds the synced files the last scan did not find: a file is
 	// only deleted when two scans miss it, as saves may move it away briefly.
 	missing, prevMissing map[string]bool
@@ -313,11 +314,13 @@ func (d *daemon) sync(ctx context.Context) error {
 	if err := d.scan(); err != nil {
 		return err
 	}
-	if err := d.pushImages(ctx); err != nil {
-		return err
-	}
+	// Notes first: the server carries the images of moved notes along, while
+	// moving an image changes the notes using it.
 	remote, err := d.pushNotes(ctx)
 	if err != nil {
+		return err
+	}
+	if err := d.pushImages(ctx); err != nil {
 		return err
 	}
 	images, err := d.c.images(ctx, d.st.Session)
@@ -341,7 +344,10 @@ func (d *daemon) scan() error {
 	if _, err := d.root.Lstat(".notely.lock"); err != nil {
 		return fmt.Errorf("%s was removed; restart the daemon", d.st.Dir)
 	}
-	d.files, d.dirs = map[string]*file{}, map[string]bool{}
+	d.files, d.dirs, d.dirSpace = map[string]*file{}, map[string]bool{}, map[string]string{}
+	for p, e := range d.st.Files {
+		d.mapDir(path.Dir(p), e.Space)
+	}
 	if err := d.walk(); err != nil {
 		return err
 	}
@@ -373,8 +379,10 @@ func (d *daemon) deletable(p string) bool {
 func (d *daemon) walk() error {
 	return fs.WalkDir(d.root.FS(), ".", func(p string, de fs.DirEntry, err error) error {
 		switch {
-		case err != nil:
+		case err != nil && p == ".":
 			return err
+		case err != nil:
+			return d.unreadable(p, de, err)
 		case p != "." && strings.HasPrefix(de.Name(), "."):
 			if de.IsDir() {
 				return fs.SkipDir
@@ -388,7 +396,7 @@ func (d *daemon) walk() error {
 		}
 		info, err := de.Info()
 		if err != nil {
-			return err
+			return d.unreadable(p, de, err)
 		}
 		f := &file{size: info.Size(), mod: info.ModTime()}
 		e, known := d.st.Files[p]
@@ -404,7 +412,7 @@ func (d *daemon) walk() error {
 			return nil
 		}
 		if f.data, err = d.root.ReadFile(p); err != nil {
-			return err
+			return d.unreadable(p, de, err)
 		}
 		f.sum = sum(f.data)
 		if f.clean = known && e.Sum == f.sum; f.clean {
@@ -414,6 +422,25 @@ func (d *daemon) walk() error {
 		d.files[p] = f
 		return nil
 	})
+}
+
+// unreadable logs that the scan cannot read p and keeps the synced files at
+// or below it as they were, so they are not deleted. A file that vanished
+// meanwhile is left out.
+func (d *daemon) unreadable(p string, de fs.DirEntry, err error) error {
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	d.reject(p, "unreadable", err)
+	for k, e := range d.st.Files {
+		if k == p || strings.HasPrefix(k, p+"/") {
+			d.files[k] = &file{sum: e.Sum, size: e.Size, mod: e.ModTime, clean: true}
+		}
+	}
+	if de != nil && de.IsDir() {
+		return fs.SkipDir
+	}
+	return nil
 }
 
 // reject logs that file p with sum cannot be synced, once until it changes.
@@ -783,6 +810,7 @@ func (d *daemon) pull(p string, f *file, r note.Note) {
 // track records the file at p, whose note has updated time local, as
 // synced with note r.
 func (d *daemon) track(p string, r note.Note, local time.Time, size int64, mod time.Time, sum string) {
+	d.mapDir(path.Dir(p), r.Space)
 	d.st.Files[p] = entry{
 		ID: r.ID, Space: r.Space, Title: r.Title, Pinned: r.Pinned, Sum: sum, Size: size, ModTime: mod,
 		Checked: time.Now(), Version: noteVersion(r), Updated: noteVersion(note.Note{Updated: local}),
@@ -793,7 +821,7 @@ func (d *daemon) track(p string, r note.Note, local time.Time, size int64, mod t
 // else the first free <space>/<title>[-N].md (.excalidraw for drawings). As
 // on the server, files the daemon does not own are never replaced.
 func (d *daemon) pathFor(n note.Note, old string) string {
-	base, ext := path.Join(spaceDir(n.Space), notefile.Name(n.Title, "untitled")), notefile.Ext(n.Kind)
+	base, ext := path.Join(d.spaceDir(n.Space), notefile.Name(n.Title, "untitled")), notefile.Ext(n.Kind)
 	if old != "" && notefile.Numbered(old, base, ext) {
 		return old
 	}
@@ -808,16 +836,55 @@ func (d *daemon) pathFor(n note.Note, old string) string {
 	}
 }
 
-// spaceDir is the directory of space: a directory per subspace.
-func spaceDir(space string) string {
+// spaceDir is the directory of space: a directory per subspace, named
+// after it. A name that another space's directory has already, also
+// ignoring case as macOS does, gets -2, -3, ….
+func (d *daemon) spaceDir(space string) string {
+	dir := "."
 	if space == "" {
-		return "."
+		return dir
 	}
 	parts := strings.Split(space, "/")
-	for i, s := range parts {
-		parts[i] = notefile.Name(s, "unnamed")
+	for i, part := range parts {
+		sub, name := strings.Join(parts[:i+1], "/"), notefile.Name(part, "unnamed")
+		for n := 1; ; n++ {
+			c := path.Join(dir, name)
+			if n > 1 {
+				c = path.Join(dir, fmt.Sprintf("%s-%d", name, n))
+			}
+			if !d.dirTaken(c, sub) {
+				dir = c
+				break
+			}
+		}
 	}
-	return path.Join(parts...)
+	return dir
+}
+
+// dirTaken reports whether directory dir, or one differing only in case,
+// holds another space than space.
+func (d *daemon) dirTaken(dir, space string) bool {
+	for o, s := range d.dirSpace {
+		if s != space && strings.EqualFold(o, dir) {
+			return true
+		}
+	}
+	return false
+}
+
+// mapDir records that directory dir holds space, and its parents the
+// parent spaces.
+func (d *daemon) mapDir(dir, space string) {
+	if dir == "." || d.dirSpace == nil {
+		return
+	}
+	dirs, spaces := strings.Split(dir, "/"), strings.Split(space, "/")
+	if len(dirs) != len(spaces) {
+		return
+	}
+	for i := range dirs {
+		d.dirSpace[strings.Join(dirs[:i+1], "/")] = strings.Join(spaces[:i+1], "/")
+	}
 }
 
 // pushImages uploads new and changed image files and deletes or moves the
@@ -848,7 +915,12 @@ func (d *daemon) pushImages(ctx context.Context) error {
 		} else if err != nil {
 			return err
 		}
-		to := path.Join(spaceDir(img.Space), img.Name)
+		if !note.ImageName.MatchString(img.Name) {
+			d.reject(p, f.sum, fmt.Errorf("invalid name from the server: %q", img.Name))
+			continue
+		}
+		d.again = true // the server may have changed the notes using it
+		to := path.Join(d.spaceDir(img.Space), img.Name)
 		if e, ok := d.st.Files[to]; to != p && ok && e.ID == "" {
 			d.reject(p, f.sum, fmt.Errorf("the same image as %s", to)) // stored once per space
 			continue
@@ -861,6 +933,7 @@ func (d *daemon) pushImages(ctx context.Context) error {
 			delete(d.files, p)
 			d.files[to] = f
 		}
+		d.mapDir(path.Dir(to), img.Space)
 		d.st.Files[to] = entry{
 			Space: img.Space, Sum: f.sum, Size: f.size, ModTime: f.mod, Checked: time.Now(), Version: img.Version,
 		}
@@ -907,19 +980,15 @@ func (d *daemon) pushImage(ctx context.Context, p string, f *file, gone map[stri
 	if img.Space == former.Space && img.Name == former.Name { // the same content
 		return img, nil
 	}
-	if e, ok := d.st.Files[path.Join(spaceDir(img.Space), img.Name)]; ok && e.ID == "" {
+	if e, ok := d.st.Files[path.Join(d.spaceDir(img.Space), img.Name)]; ok && e.ID == "" {
 		return img, nil // the same as another image, which stays
 	}
+	// Until the move succeeds, p stays synced as the former image, so the
+	// next sync retries: the upload then finds the same image again.
 	if err := d.c.deleteImage(ctx, d.st.Session, former); err != nil && !errors.Is(err, errNotFound) {
 		return img, err
 	}
-	delete(d.st.Files, p)
-	moved, err := d.c.moveImage(ctx, d.st.Session, img, former.Space, former.Stem())
-	if err != nil {
-		log.Printf("%s: %v", p, err)
-		return img, nil // the file takes the uploaded image's name
-	}
-	return moved, nil
+	return d.c.moveImage(ctx, d.st.Session, img, former.Space, former.Stem())
 }
 
 // movedFrom returns the path in gone that the image at p with sum moved from.
@@ -945,7 +1014,7 @@ func (d *daemon) pullImages(ctx context.Context, images []note.Image) error {
 		if !note.ImageName.MatchString(img.Name) {
 			continue
 		}
-		p := path.Join(spaceDir(img.Space), img.Name)
+		p := path.Join(d.spaceDir(img.Space), img.Name)
 		remote[p] = true
 		f, ok := d.files[p]
 		e, known := d.st.Files[p]
@@ -970,6 +1039,7 @@ func (d *daemon) pullImages(ctx context.Context, images []note.Image) error {
 		if err != nil {
 			return err
 		}
+		d.mapDir(path.Dir(p), img.Space)
 		d.st.Files[p] = entry{
 			Space: img.Space, Sum: sum(data), Size: info.Size(), ModTime: info.ModTime(), Checked: time.Now(),
 			Version: img.Version,

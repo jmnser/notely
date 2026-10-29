@@ -274,6 +274,10 @@ func TestDaemonImages(t *testing.T) {
 		t.Fatal(err)
 	}
 	syncOK(t, d)
+	if !d.again {
+		t.Error("no follow-up sync for the notes the move changed")
+	}
+	syncOK(t, d)
 	if images, _ = other.images(ctx, token); len(images) != 1 || images[0].Name != "sea.png" {
 		t.Fatalf("move not pushed: %+v", images)
 	}
@@ -478,5 +482,63 @@ func TestDaemonImageMoves(t *testing.T) {
 	images, _ := other.images(ctx, token)
 	if len(images) != 2 || images[0].Name != "c.png" && images[1].Name != "c.png" {
 		t.Fatalf("images = %+v, want c.png uploaded", images)
+	}
+}
+
+func TestDaemonFolderMove(t *testing.T) {
+	d, other, token := mirrored(t)
+	writeFile(t, d, "Work/pic.png", string(pngData(t, 1)))
+	writeFile(t, d, "Work/Plan.md", "![](pic.png)")
+	writeFile(t, d, "Work/Other.md", "x")
+	syncOK(t, d)
+	if err := os.Rename(filepath.Join(d.st.Dir, "Work"), filepath.Join(d.st.Dir, "Job")); err != nil {
+		t.Fatal(err)
+	}
+	for range 3 {
+		syncOK(t, d)
+	}
+	notes := remoteNotes(t, other, token)
+	if notes["Plan"].Space != "Job" || notes["Other"].Space != "Job" || !strings.HasSuffix(notes["Plan"].Body, "![](pic.png)") {
+		t.Fatalf("notes = %+v, want both in Job", notes)
+	}
+	images, _ := other.images(t.Context(), token)
+	if len(images) != 1 || images[0].Path() != "Job/pic.png" || exists(d, "Work") {
+		t.Fatalf("images = %+v, want Job/pic.png only", images)
+	}
+}
+
+func TestDaemonUnreadableDir(t *testing.T) {
+	d, other, token := mirrored(t)
+	writeFile(t, d, "Work/Plan.md", "x")
+	syncOK(t, d)
+	work := filepath.Join(d.st.Dir, "Work")
+	if err := os.Chmod(work, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(work, 0o700) })
+	if _, err := os.ReadDir(work); err == nil {
+		t.Skip("permissions not enforced")
+	}
+	syncOK(t, d)
+	syncOK(t, d)
+	if len(remoteNotes(t, other, token)) != 1 {
+		t.Fatal("notes of an unreadable directory deleted")
+	}
+}
+
+func TestDaemonSpaceDirs(t *testing.T) {
+	d := &daemon{dirSpace: map[string]string{}}
+	d.mapDir("Work/A", "Work/A")
+	for space, want := range map[string]string{
+		"":       ".",
+		"Work":   "Work",
+		"Work/B": "Work/B",
+		"work":   "work-2", // one directory on macOS
+		"work/A": "work-2/A",
+		"a:b":    "a-b",
+	} {
+		if got := d.spaceDir(space); got != want {
+			t.Errorf("spaceDir(%q) = %q, want %q", space, got, want)
+		}
 	}
 }
