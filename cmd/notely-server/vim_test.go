@@ -117,6 +117,10 @@ func TestVim(t *testing.T) {
 		{"|ab\ncd", "v$d", "|cd", false},
 		{"|abc\nd", "v$jhd", "|", false},
 		{"|abc", "9999l", "ab|c", false},
+		{"abc|def\nx\ny\nabcdef", "j2j", "abcdef\nx\ny\nabc|def", false},
+		{"abc|def\nx\nabcdef", "jd\x1bj", "abcdef\nx\nabc|def", false},
+		{"abc|def\nx\nabcdef", "jvjd", "abcdef\n|ef", false},
+		{"|   \nx", "v$^d", "|\nx", false},
 	}
 	for _, tt := range tests {
 		pos := strings.Index(tt.in, "|")

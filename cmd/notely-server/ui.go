@@ -550,28 +550,23 @@ func (u *ui) toggleDrawer(app.Context, app.Event) {
 }
 
 // shortcut handles the app's keys: Ctrl or Cmd+L and / go to the search;
-// outside text fields e and i edit the open note, j and k scroll it.
+// outside text fields e and i edit the open note, j and k scroll it. It runs
+// outside Dispatch, as preventDefault must happen before it returns.
 func (u *ui) shortcut(ctx app.Context, e app.Value) {
-	cur := u.find(u.current)
-	if e.Get("defaultPrevented").Bool() || e.Get("isComposing").Bool() || u.signedOut ||
-		cur != nil && cur.Kind == note.Drawing || // Excalidraw has its own keys
+	k := e.Get("key").String()
+	ctrl, alt := e.Get("ctrlKey").Bool() || e.Get("metaKey").Bool(), e.Get("altKey").Bool()
+	search := ctrl && !alt && !e.Get("shiftKey").Bool() && strings.EqualFold(k, "l")
+	if !search && (ctrl || alt || e.Get("repeat").Bool() || typing(e.Get("target"))) ||
+		e.Get("defaultPrevented").Bool() || e.Get("isComposing").Bool() || u.signedOut ||
 		!app.Window().Get("document").Call("querySelector", "dialog[open]").IsNull() {
 		return
 	}
-	k := e.Get("key").String()
-	ctrl, alt := e.Get("ctrlKey").Bool() || e.Get("metaKey").Bool(), e.Get("altKey").Bool()
-	if ctrl && !alt && !e.Get("shiftKey").Bool() && strings.EqualFold(k, "l") {
-		e.Call("preventDefault")
-		ctx.Dispatch(u.focusSearch)
-		return
-	}
-	t := e.Get("target")
-	if ctrl || alt || t.Get("isContentEditable").Bool() ||
-		slices.Contains([]string{"INPUT", "TEXTAREA", "SELECT"}, t.Get("tagName").String()) {
+	cur := u.find(u.current)
+	if cur != nil && cur.Kind == note.Drawing { // Excalidraw has its own keys
 		return
 	}
 	switch {
-	case k == "/":
+	case search || k == "/":
 		ctx.Dispatch(u.focusSearch)
 	case cur == nil || u.editing:
 		return
@@ -592,13 +587,25 @@ func (u *ui) shortcut(ctx app.Context, e app.Value) {
 	e.Call("preventDefault")
 }
 
+// typing reports whether element t takes text.
+func typing(t app.Value) bool {
+	switch t.Get("tagName").String() {
+	case "TEXTAREA", "SELECT":
+		return true
+	case "INPUT":
+		return !slices.Contains([]string{"checkbox", "radio", "button", "submit"}, t.Get("type").String())
+	}
+	return t.Get("isContentEditable").Bool()
+}
+
 // focusSearch shows the sidebar and focuses its search field.
 func (u *ui) focusSearch(ctx app.Context) {
 	if u.drawer {
 		u.toggleDrawer(ctx, app.Event{})
 	}
 	if app.Window().Call("matchMedia", "(max-width: 600px)").Get("matches").Bool() {
-		u.open("") // the list and the note share the screen
+		u.openImage("") // the list, notes and images share the screen
+		u.open("")
 	}
 	ctx.Defer(func(app.Context) {
 		el := app.Window().GetElementByID("search")
@@ -1078,6 +1085,15 @@ func (u *ui) replace(el app.Value, v string, from, to int, s string) string {
 // normalKey handles a key in the editor's Vim Normal mode. Shortcuts, Shift
 // with an arrow key and other keys without a Vim meaning keep their default.
 func (u *ui) normalKey(ctx app.Context, e app.Event) {
+	el := ctx.JSSrc()
+	v := el.Get("value").String()
+	if u.vim.visual != "" { // a click, Shift selection or undo since ends Visual mode
+		from, to := u.vim.selection(v, u.vim.at)
+		if v != u.vim.seen || el.Get("selectionStart").Int() != utf16Offset(v, from) ||
+			el.Get("selectionEnd").Int() != utf16Offset(v, to) {
+			u.vim.visual = ""
+		}
+	}
 	k := e.Get("key").String()
 	switch {
 	case e.Get("isComposing").Bool(), e.Get("metaKey").Bool(), e.Get("altKey").Bool(),
@@ -1100,8 +1116,6 @@ func (u *ui) normalKey(ctx app.Context, e app.Event) {
 		return
 	}
 	e.PreventDefault()
-	el := ctx.JSSrc()
-	v := el.Get("value").String()
 	a := u.vim.key(v, byteOffset(v, el.Get("selectionStart").Int()), k)
 	switch {
 	case a.cmd != "":
@@ -1131,7 +1145,8 @@ func (u *ui) beforeInput(_ app.Context, e app.Event) {
 // offset c. In Normal mode it selects the character there as a block cursor,
 // in Visual mode the selection.
 func (u *ui) vimCursor(el app.Value, v string, c int) {
-	from, to := min(c, len(v)), min(c, len(v))
+	from := min(c, len(v))
+	to := from
 	if u.vimOn {
 		from, to = u.vim.selection(v, c)
 	}

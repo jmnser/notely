@@ -57,7 +57,7 @@ const (
 // vimAliases maps editing keys to their Normal mode commands.
 var vimAliases = map[string]string{
 	"Backspace": "<BS>", "Enter": "+", "ArrowLeft": "h", "ArrowDown": "j", "ArrowUp": "k", "ArrowRight": "l",
-	"Home": "0", "End": "$",
+	"Home": "<Home>", "End": "$",
 }
 
 // motions move from byte offset pos of s.
@@ -88,14 +88,15 @@ var motions = map[string]func(s string, pos int) int{
 		}
 		return pos
 	},
-	"0":  lineStart,
-	"^":  firstNonBlank,
-	"$":  lineEnd,
-	"w":  wordForward,
-	"b":  wordBack,
-	"e":  wordEnd,
-	"gg": func(s string, _ int) int { return firstNonBlank(s, 0) },
-	"G":  func(s string, _ int) int { return firstNonBlank(s, lineStart(s, len(s))) },
+	"0":      lineStart,
+	"<Home>": lineStart, // 0 after a count digit would extend it
+	"^":      firstNonBlank,
+	"$":      lineEnd,
+	"w":      wordForward,
+	"b":      wordBack,
+	"e":      wordEnd,
+	"gg":     func(s string, _ int) int { return firstNonBlank(s, 0) },
+	"G":      func(s string, _ int) int { return firstNonBlank(s, lineStart(s, len(s))) },
 }
 
 // key handles Normal or Visual mode key k, a character, "<C-r>", "<BS>" or
@@ -113,7 +114,8 @@ func (v *vim) key(s string, pos int, k string) vimEdit {
 	if pos != v.goalAt {
 		v.goal = -1
 	}
-	v.goalAt = -1 // set again by j, k and $
+	goalAt := v.goalAt
+	v.goalAt = -1 // set again by j, k and $, kept by keys that do nothing yet
 	keys := append(slices.Clip(v.pending), k)
 	v.pending = nil
 	e := v.do(s, pos, keys)
@@ -125,14 +127,18 @@ func (v *vim) key(s string, pos int, k string) vimEdit {
 		v.last = dot{} // Visual changes don't repeat
 	case v.insert:
 		v.change, v.insAt, v.insText = keys, e.cursor, n
+		v.last = dot{} // until Escape captures the change
 	default:
 		v.last = dot{keys: keys}
 	}
 	if !v.insert && e.cmd == "" && (v.visual == "" || v.goal != math.MaxInt) {
 		e.cursor = clamp(n, e.cursor)
 	}
-	if v.goalAt >= 0 {
+	switch {
+	case v.goalAt >= 0:
 		v.goalAt = e.cursor
+	case e.cursor == pos && !changed && e.cmd == "":
+		v.goalAt = goalAt
 	}
 	if v.visual != "" {
 		v.at, v.seen = e.cursor, s
@@ -179,6 +185,7 @@ func (v *vim) do(s string, pos int, keys []string) vimEdit {
 	case m == "$":
 		v.goal = math.MaxInt
 	case m != "j" && m != "k":
+		v.goal = -1
 		return vimEdit{cursor: t}
 	case t == pos:
 	default:
@@ -259,7 +266,8 @@ func (v *vim) reset() {
 // onto the last inserted character. A change typed in a row becomes the one
 // to repeat.
 func (v *vim) escape(s string, pos int) int {
-	if t := v.insText; v.change != nil {
+	if v.change != nil {
+		t := v.insText
 		v.last = dot{}
 		if pos >= v.insAt && len(s)-pos == len(t)-v.insAt && s[:v.insAt] == t[:v.insAt] && s[pos:] == t[v.insAt:] {
 			v.last = dot{keys: v.change, text: s[v.insAt:pos]}
@@ -297,7 +305,7 @@ func (v *vim) command(s string, pos int, m string, n int) vimEdit {
 		st := lineStart(s, pos)
 		return vimEdit{from: st, to: st, insert: "\n", cursor: st}
 	case "v", "V":
-		v.visual, v.anchor, v.seen = m, pos, s
+		v.visual, v.anchor = m, pos
 		return vimEdit{cursor: pos}
 	case "x":
 		return v.operate(s, pos, "d", "l", n)
