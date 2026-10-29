@@ -549,25 +549,27 @@ func TestDaemonServerReset(t *testing.T) {
 	writeFile(t, d, "B.md", "b")
 	syncOK(t, d)
 	notes := remoteNotes(t, other, token)
-	// Deleted elsewhere while another note exists: synced as usual.
+	// Deleted elsewhere while another note is edited here: synced as usual.
 	if _, _, err := other.exchange(t.Context(), token, []note.Note{{ID: "c", Title: "C"}},
 		[]string{notes["A"].ID}); err != nil {
 		t.Fatal(err)
 	}
+	b, _ := notefile.Decode([]byte(readFile(t, d, "B.md")), ".md")
+	b.Body = "edited"
+	writeFile(t, d, "B.md", string(notefile.EncodeMarkdown(b)))
 	syncOK(t, d)
-	if exists(d, "A.md") || !exists(d, "C.md") {
-		t.Fatal("deletion elsewhere not synced")
+	if exists(d, "A.md") || !exists(d, "C.md") || remoteNotes(t, other, token)["B"].Body != "edited" {
+		t.Fatal("changes not synced")
 	}
 	// The server lost its data while a file was added here.
-	notes = remoteNotes(t, other, token)
-	if _, _, err := other.exchange(t.Context(), token, nil, []string{notes["B"].ID, notes["C"].ID}); err != nil {
+	if _, _, err := other.exchange(t.Context(), token, nil, []string{b.ID, "c"}); err != nil {
 		t.Fatal(err)
 	}
 	writeFile(t, d, "New.md", "new")
 	if err := d.sync(t.Context()); err == nil {
 		t.Fatal("sync with a reset server succeeded")
 	}
-	if !exists(d, "B.md") || !exists(d, "C.md") {
-		t.Fatal("files removed")
+	if !exists(d, "B.md") || !exists(d, "C.md") || len(remoteNotes(t, other, token)) != 0 {
+		t.Fatal("files removed or pushed")
 	}
 }

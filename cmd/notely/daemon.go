@@ -63,17 +63,16 @@ type entry struct {
 
 // file is a note or image file found by a scan.
 type file struct {
-	sum    string
-	size   int64
-	mod    time.Time
-	data   []byte     // read unless clean or too large
-	clean  bool       // unchanged since last synced
-	large  bool       // too large to sync
-	note   *note.Note // a changed note file, decoded
-	moved  string     // the note's former path
-	known  bool       // a note to compare with the server's first, e.g. left by a crash
-	base   string     // with known: the server's version last synced, if any
-	pushed bool       // an image pushed by the running sync
+	sum   string
+	size  int64
+	mod   time.Time
+	data  []byte     // read unless clean or too large
+	clean bool       // unchanged since last synced
+	large bool       // too large to sync
+	note  *note.Note // a changed note file, decoded
+	moved string     // the note's former path
+	known bool       // a note to compare with the server's first, e.g. left by a crash
+	base  string     // with known: the server's version last synced, if any
 }
 
 // daemon mirrors a user's notes and images to a directory: it pushes the
@@ -315,57 +314,33 @@ func (d *daemon) sync(ctx context.Context) error {
 	if err := d.scan(); err != nil {
 		return err
 	}
-	// Notes first: the server carries the images of moved notes along, while
-	// moving an image changes the notes using it.
-	remote, err := d.pushNotes(ctx)
+	before, _, err := d.c.exchange(ctx, d.st.Session, nil, nil)
 	if err != nil {
-		return err
-	}
-	if err := d.pushImages(ctx); err != nil {
 		return err
 	}
 	images, err := d.c.images(ctx, d.st.Session)
 	if err != nil {
 		return err
 	}
-	if d.serverLost(remote, images) {
+	if len(before) == 0 && len(images) == 0 && len(d.st.Files) > 0 {
 		// E.g. a server restored without its data: the files may be the last copy.
 		return fmt.Errorf("the server has no notes, so the files are kept; delete them, "+
 			"or stop the daemon and remove %s to upload them again", d.stateFile)
 	}
+	// Notes first: the server carries the images of moved notes along, while
+	// moving an image changes the notes using it.
+	remote, err := d.pushNotes(ctx, before)
+	if err != nil {
+		return err
+	}
+	if err := d.pushImages(ctx); err != nil {
+		return err
+	}
+	if images, err = d.c.images(ctx, d.st.Session); err != nil {
+		return err
+	}
 	d.pullNotes(remote)
 	return d.pullImages(ctx, images)
-}
-
-// serverLost reports whether the server has nothing but what this sync
-// pushed, while files were synced before: e.g. restored without its data.
-func (d *daemon) serverLost(remote []note.Note, images []note.Image) bool {
-	pushed := map[string]bool{} // IDs and image paths
-	synced := false
-	for p, f := range d.files {
-		switch {
-		case f.note != nil:
-			pushed[f.note.ID] = true
-		case f.pushed:
-			pushed[p] = true
-		}
-	}
-	for p := range d.st.Files {
-		if !pushed[p] && !pushed[d.st.Files[p].ID] {
-			synced = true
-		}
-	}
-	for _, n := range remote {
-		if !pushed[n.ID] {
-			return false
-		}
-	}
-	for _, img := range images {
-		if !pushed[path.Join(d.spaceDir(img.Space), img.Name)] {
-			return false
-		}
-	}
-	return synced
 }
 
 // scan finds the note and image files, reading those changed since the last
@@ -484,12 +459,10 @@ func (d *daemon) reject(p, sum string, err error) {
 }
 
 // pushNotes sends the changed notes and deletions and returns the server's
-// notes.
-func (d *daemon) pushNotes(ctx context.Context) ([]note.Note, error) {
+// notes; before is its list from the start of the sync.
+func (d *daemon) pushNotes(ctx context.Context, before []note.Note) ([]note.Note, error) {
 	present := d.localNotes()
-	if err := d.compare(ctx); err != nil {
-		return nil, err
-	}
+	d.compare(before)
 	var push []note.Note
 	paths := map[string]string{} // ID → path of the pushed notes
 	for p, f := range d.files {
@@ -533,19 +506,12 @@ func (d *daemon) pushNotes(ctx context.Context) ([]note.Note, error) {
 // compare checks the known notes against the server's: a file that only
 // differs in the updated time is taken as synced; an older one, or a move
 // while the note changed there, is replaced by the server's version.
-func (d *daemon) compare(ctx context.Context) error {
+func (d *daemon) compare(remote []note.Note) {
 	var known []string
 	for _, p := range sortedKeys(d.files) {
 		if f := d.files[p]; f.known && f.note != nil {
 			known = append(known, p)
 		}
-	}
-	if len(known) == 0 {
-		return nil
-	}
-	remote, _, err := d.c.exchange(ctx, d.st.Session, nil, nil)
-	if err != nil {
-		return err
 	}
 	byID := map[string]note.Note{}
 	for _, r := range remote {
@@ -571,7 +537,6 @@ func (d *daemon) compare(ctx context.Context) error {
 			delete(d.st.Files, f.moved)
 		}
 	}
-	return nil
 }
 
 // localNotes decodes the changed note files and returns the IDs found. A
@@ -986,7 +951,7 @@ func (d *daemon) pushImages(ctx context.Context) error {
 		d.st.Files[to] = entry{
 			Space: img.Space, Sum: f.sum, Size: f.size, ModTime: f.mod, Checked: time.Now(), Version: img.Version,
 		}
-		f.clean, f.pushed = true, true
+		f.clean = true
 		log.Printf("pushed %s", to)
 	}
 	for _, p := range sortedKeys(gone) {
