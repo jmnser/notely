@@ -542,3 +542,23 @@ func TestDaemonSpaceDirs(t *testing.T) {
 		}
 	}
 }
+
+func TestDaemonServerReset(t *testing.T) {
+	d, other, token := mirrored(t)
+	writeFile(t, d, "A.md", "a")
+	writeFile(t, d, "B.md", "b")
+	syncOK(t, d)
+	notes := remoteNotes(t, other, token)
+	// The server lost its data, then a client created a note.
+	if _, _, err := other.exchange(t.Context(), token, []note.Note{{ID: "c", Title: "C"}},
+		[]string{notes["A"].ID, notes["B"].ID}); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, d, "New.md", "new")
+	if err := d.sync(t.Context()); err == nil {
+		t.Fatal("sync with a reset server succeeded")
+	}
+	if !exists(d, "A.md") || !exists(d, "B.md") {
+		t.Fatal("files removed")
+	}
+}

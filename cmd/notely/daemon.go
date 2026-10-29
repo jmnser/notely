@@ -63,16 +63,17 @@ type entry struct {
 
 // file is a note or image file found by a scan.
 type file struct {
-	sum   string
-	size  int64
-	mod   time.Time
-	data  []byte     // read unless clean or too large
-	clean bool       // unchanged since last synced
-	large bool       // too large to sync
-	note  *note.Note // a changed note file, decoded
-	moved string     // the note's former path
-	known bool       // a note to compare with the server's first, e.g. left by a crash
-	base  string     // with known: the server's version last synced, if any
+	sum    string
+	size   int64
+	mod    time.Time
+	data   []byte     // read unless clean or too large
+	clean  bool       // unchanged since last synced
+	large  bool       // too large to sync
+	note   *note.Note // a changed note file, decoded
+	moved  string     // the note's former path
+	known  bool       // a note to compare with the server's first, e.g. left by a crash
+	base   string     // with known: the server's version last synced, if any
+	pushed bool       // an image pushed by the running sync
 }
 
 // daemon mirrors a user's notes and images to a directory: it pushes the
@@ -327,13 +328,36 @@ func (d *daemon) sync(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if len(remote) == 0 && len(images) == 0 && len(d.st.Files) > 0 {
+	if d.serverLost(remote, images) {
 		// E.g. a server restored without its data: the files may be the last copy.
 		return fmt.Errorf("the server has no notes, so the files are kept; delete them, "+
 			"or stop the daemon and remove %s to upload them again", d.stateFile)
 	}
 	d.pullNotes(remote)
 	return d.pullImages(ctx, images)
+}
+
+// serverLost reports whether the server has none of the notes and images
+// synced before, apart from those pushed now.
+func (d *daemon) serverLost(remote []note.Note, images []note.Image) bool {
+	on := map[string]bool{} // IDs and image paths
+	for _, n := range remote {
+		on[n.ID] = true
+	}
+	for _, img := range images {
+		on[path.Join(d.spaceDir(img.Space), img.Name)] = true
+	}
+	synced := false
+	for p, e := range d.st.Files {
+		if f, ok := d.files[p]; ok && (!f.clean || f.pushed || f.note != nil) {
+			continue
+		}
+		if on[cmp.Or(e.ID, p)] {
+			return false
+		}
+		synced = true
+	}
+	return synced
 }
 
 // scan finds the note and image files, reading those changed since the last
@@ -830,6 +854,9 @@ func (d *daemon) pathFor(n note.Note, old string) string {
 		if i > 1 {
 			p = fmt.Sprintf("%s-%d%s", base, i, ext)
 		}
+		if e, ok := d.st.Files[p]; ok && e.ID != n.ID {
+			continue // another note's, maybe moved away briefly
+		}
 		if _, err := d.root.Lstat(p); err != nil || p == old || strings.EqualFold(p, old) && d.sameFile(p, old) {
 			return p
 		}
@@ -937,7 +964,7 @@ func (d *daemon) pushImages(ctx context.Context) error {
 		d.st.Files[to] = entry{
 			Space: img.Space, Sum: f.sum, Size: f.size, ModTime: f.mod, Checked: time.Now(), Version: img.Version,
 		}
-		f.clean = true
+		f.clean, f.pushed = true, true
 		log.Printf("pushed %s", to)
 	}
 	for _, p := range sortedKeys(gone) {
