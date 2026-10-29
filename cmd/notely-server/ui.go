@@ -552,30 +552,35 @@ func (u *ui) toggleDrawer(app.Context, app.Event) {
 // shortcut handles the app's keys: Ctrl or Cmd+L and / go to the search;
 // outside text fields e and i edit the open note, j and k scroll it.
 func (u *ui) shortcut(ctx app.Context, e app.Value) {
-	k := e.Get("key").String()
-	ctrl, alt := e.Get("ctrlKey").Bool() || e.Get("metaKey").Bool(), e.Get("altKey").Bool()
-	if u.signedOut || e.Get("isComposing").Bool() ||
+	cur := u.find(u.current)
+	if e.Get("defaultPrevented").Bool() || e.Get("isComposing").Bool() || u.signedOut ||
+		cur != nil && cur.Kind == note.Drawing || // Excalidraw has its own keys
 		!app.Window().Get("document").Call("querySelector", "dialog[open]").IsNull() {
 		return
 	}
+	k := e.Get("key").String()
+	ctrl, alt := e.Get("ctrlKey").Bool() || e.Get("metaKey").Bool(), e.Get("altKey").Bool()
 	if ctrl && !alt && !e.Get("shiftKey").Bool() && strings.EqualFold(k, "l") {
 		e.Call("preventDefault")
 		ctx.Dispatch(u.focusSearch)
 		return
 	}
-	cur := u.find(u.current)
 	t := e.Get("target")
-	if ctrl || alt || t.Get("isContentEditable").Bool() || slices.Contains([]string{"INPUT", "TEXTAREA", "SELECT"},
-		t.Get("tagName").String()) || cur != nil && cur.Kind == note.Drawing || // Excalidraw has its own keys
-		k != "/" && (cur == nil || u.editing) {
+	if ctrl || alt || t.Get("isContentEditable").Bool() ||
+		slices.Contains([]string{"INPUT", "TEXTAREA", "SELECT"}, t.Get("tagName").String()) {
 		return
 	}
-	switch k {
-	case "/":
+	switch {
+	case k == "/":
 		ctx.Dispatch(u.focusSearch)
-	case "e", "i":
-		ctx.Dispatch(func(ctx app.Context) { u.setEditing(ctx, true) })
-	case "j", "k":
+	case cur == nil || u.editing:
+		return
+	case k == "e" || k == "i":
+		ctx.Dispatch(func(ctx app.Context) {
+			u.setEditing(ctx, true)
+			u.vim.insert = k == "i" // with Vim keys, i starts typing
+		})
+	case k == "j" || k == "k":
 		dy := 64
 		if k == "k" {
 			dy = -dy
@@ -591,6 +596,9 @@ func (u *ui) shortcut(ctx app.Context, e app.Value) {
 func (u *ui) focusSearch(ctx app.Context) {
 	if u.drawer {
 		u.toggleDrawer(ctx, app.Event{})
+	}
+	if app.Window().Call("matchMedia", "(max-width: 600px)").Get("matches").Bool() {
+		u.open("") // the list and the note share the screen
 	}
 	ctx.Defer(func(app.Context) {
 		el := app.Window().GetElementByID("search")
@@ -1098,7 +1106,9 @@ func (u *ui) normalKey(ctx app.Context, e app.Event) {
 	switch {
 	case a.cmd != "":
 		for range a.times {
-			app.Window().Get("document").Call("execCommand", a.cmd)
+			if !app.Window().Get("document").Call("execCommand", a.cmd).Bool() {
+				break
+			}
 		}
 		v = el.Get("value").String()
 		a.cursor = clamp(v, byteOffset(v, el.Get("selectionStart").Int()))
@@ -1125,7 +1135,11 @@ func (u *ui) vimCursor(el app.Value, v string, c int) {
 	if u.vimOn {
 		from, to = u.vim.selection(v, c)
 	}
-	el.Call("setSelectionRange", utf16Offset(v, from), utf16Offset(v, to))
+	dir := "forward" // the browser keeps the cursor end in view
+	if u.vim.visual != "" && c < u.vim.anchor {
+		dir = "backward"
+	}
+	el.Call("setSelectionRange", utf16Offset(v, from), utf16Offset(v, to), dir)
 }
 
 func (u *ui) toggleVim(ctx app.Context, _ app.Event) {

@@ -110,6 +110,13 @@ func TestVim(t *testing.T) {
 		{"|ab cd", "vd.", "|b cd", false},
 		{"|ab", "vvx", "|b", false},
 		{"|ab", "vl\x1bx", "|a", false},
+		{"|a b c d e f", "dw3.", "|e f", false},
+		{"|a b c d e f", "2dw.", "|e f", false},
+		{"|a\nb\nc", "2D", "|\nc", false},
+		{"|ab\ncd", "2$", "ab\nc|d", false},
+		{"|ab\ncd", "v$d", "|cd", false},
+		{"|abc\nd", "v$jhd", "|", false},
+		{"|abc", "9999l", "ab|c", false},
 	}
 	for _, tt := range tests {
 		pos := strings.Index(tt.in, "|")
@@ -168,6 +175,26 @@ func TestVimSelection(t *testing.T) {
 		if from, to := tt.v.selection(tt.s, tt.c); from != tt.from || to != tt.to {
 			t.Errorf("%+v %q %d: got %d-%d, want %d-%d", tt.v, tt.s, tt.c, from, to, tt.from, tt.to)
 		}
+	}
+}
+
+func TestVimDotText(t *testing.T) {
+	v := vim{change: []string{"i"}, insAt: 1, insText: "ab"}
+	if v.escape("axyb", 3); v.last.text != "xy" {
+		t.Errorf("typed: got %+v", v.last)
+	}
+	v = vim{last: dot{keys: []string{"x"}}, change: []string{"i"}, insAt: 1, insText: "ab"}
+	if v.escape("zb", 1); v.last.keys != nil { // the text before changed
+		t.Errorf("edited elsewhere: got %+v", v.last)
+	}
+}
+
+func TestVimVisualTextChanged(t *testing.T) {
+	var v vim
+	v.key("abc", 0, "v")
+	v.key("abc", 0, "l")
+	if e := v.key("ab", 0, "d"); v.visual != "" || e.from != e.to || len(v.pending) != 1 { // Visual mode ended, d waits
+		t.Errorf("got %+v, %+v", e, v)
 	}
 }
 

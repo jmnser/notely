@@ -3,6 +3,7 @@ package main
 import (
 	"math"
 	"slices"
+	"strconv"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -16,6 +17,7 @@ type vim struct {
 	visual   string   // Visual mode: "v" for characters, "V" for lines, or ""
 	anchor   int      // where the Visual selection started
 	at       int      // Visual mode cursor; the editor selects the whole selection
+	seen     string   // text in Visual mode; Visual mode ends if it changes
 	pending  []string // keys waiting for the rest of a command, such as 2d
 	register string   // last yanked or deleted text
 	linewise bool     // register holds whole lines, without the last line break
@@ -24,7 +26,7 @@ type vim struct {
 	last     dot      // last change, repeated by .
 	change   []string // keys of the change whose Insert mode is running
 	insAt    int      // where that Insert mode started
-	insLen   int      // length of the text then
+	insText  string   // the text then
 }
 
 // dot is a change to repeat: its keys and the text typed in Insert mode.
@@ -44,26 +46,24 @@ type vimEdit struct {
 	cursor   int
 }
 
-// maxCount limits counts, maxPaste the text a counted paste inserts.
+// maxCount limits counts, maxUndo undo steps and maxPaste the text a counted
+// paste inserts, as much as a note holds.
 const (
 	maxCount = 9999
-	maxPaste = 1 << 20
+	maxUndo  = 100
+	maxPaste = 100000
 )
 
 // vimAliases maps editing keys to their Normal mode commands.
 var vimAliases = map[string]string{
 	"Backspace": "<BS>", "Enter": "+", "ArrowLeft": "h", "ArrowDown": "j", "ArrowUp": "k", "ArrowRight": "l",
+	"Home": "0", "End": "$",
 }
 
 // motions move from byte offset pos of s.
 var motions = map[string]func(s string, pos int) int{
-	"h": func(s string, pos int) int {
-		if pos > lineStart(s, pos) {
-			return prevRune(s, pos)
-		}
-		return pos
-	},
-	"l": func(s string, pos int) int { return min(nextRune(s, pos), lineEnd(s, pos)) },
+	"h": func(s string, pos int) int { return left(s, pos, 1) },
+	"l": func(s string, pos int) int { return right(s, pos, 1) },
 	"<BS>": func(s string, pos int) int {
 		if pos > 0 {
 			return prevRune(s, pos)
@@ -101,11 +101,15 @@ var motions = map[string]func(s string, pos int) int{
 // key handles Normal or Visual mode key k, a character, "<C-r>", "<BS>" or
 // "<Esc>", with the cursor at byte offset pos of s.
 func (v *vim) key(s string, pos int, k string) vimEdit {
+	if v.visual != "" && s != v.seen { // undone or synced
+		v.visual = ""
+	}
 	visual := v.visual != ""
 	if visual {
-		pos = v.at
+		pos = v.at // may be a line break after $
+	} else {
+		pos = clamp(s, min(pos, len(s)))
 	}
-	pos = clamp(s, min(pos, len(s)))
 	if pos != v.goalAt {
 		v.goal = -1
 	}
@@ -120,15 +124,18 @@ func (v *vim) key(s string, pos int, k string) vimEdit {
 	case visual:
 		v.last = dot{} // Visual changes don't repeat
 	case v.insert:
-		v.change, v.insAt, v.insLen = keys, e.cursor, len(n)
+		v.change, v.insAt, v.insText = keys, e.cursor, n
 	default:
 		v.last = dot{keys: keys}
 	}
-	if !v.insert && e.cmd == "" {
+	if !v.insert && e.cmd == "" && (v.visual == "" || v.goal != math.MaxInt) {
 		e.cursor = clamp(n, e.cursor)
 	}
+	if v.goalAt >= 0 {
+		v.goalAt = e.cursor
+	}
 	if v.visual != "" {
-		v.at = e.cursor
+		v.at, v.seen = e.cursor, s
 	}
 	return e
 }
@@ -180,7 +187,7 @@ func (v *vim) do(s string, pos int, keys []string) vimEdit {
 		}
 		t = column(s, t, v.goal)
 	}
-	v.goalAt = clamp(s, t)
+	v.goalAt = t // the cursor, see key
 	return vimEdit{cursor: t}
 }
 
@@ -209,7 +216,30 @@ func target(s string, pos int, m string, n int) int {
 		}
 		return firstNonBlank(s, i)
 	}
+	switch m {
+	case "h":
+		return left(s, pos, max(n, 1))
+	case "l":
+		return right(s, pos, max(n, 1))
+	case "$":
+		return lineEnd(s, repeat(motions["j"], s, pos, max(n, 1)-1))
+	}
 	return repeat(motions[m], s, pos, max(n, 1))
+}
+
+// left and right move n runes on the line of pos.
+func left(s string, pos, n int) int {
+	for st := lineStart(s, pos); n > 0 && pos > st; n-- {
+		pos = prevRune(s, pos)
+	}
+	return pos
+}
+
+func right(s string, pos, n int) int {
+	for end := lineEnd(s, pos); n > 0 && pos < end; n-- {
+		pos = nextRune(s, pos)
+	}
+	return pos
 }
 
 // repeat applies motion f n times.
@@ -229,9 +259,9 @@ func (v *vim) reset() {
 // onto the last inserted character. A change typed in a row becomes the one
 // to repeat.
 func (v *vim) escape(s string, pos int) int {
-	if v.change != nil {
+	if t := v.insText; v.change != nil {
 		v.last = dot{}
-		if pos >= v.insAt && len(s)-v.insLen == pos-v.insAt {
+		if pos >= v.insAt && len(s)-pos == len(t)-v.insAt && s[:v.insAt] == t[:v.insAt] && s[pos:] == t[v.insAt:] {
 			v.last = dot{keys: v.change, text: s[v.insAt:pos]}
 		}
 	}
@@ -267,22 +297,22 @@ func (v *vim) command(s string, pos int, m string, n int) vimEdit {
 		st := lineStart(s, pos)
 		return vimEdit{from: st, to: st, insert: "\n", cursor: st}
 	case "v", "V":
-		v.visual, v.anchor = m, pos
+		v.visual, v.anchor, v.seen = m, pos, s
 		return vimEdit{cursor: pos}
 	case "x":
 		return v.operate(s, pos, "d", "l", n)
 	case "D":
-		return v.operate(s, pos, "d", "$", 0)
+		return v.operate(s, pos, "d", "$", n)
 	case "C":
-		return v.operate(s, pos, "c", "$", 0)
+		return v.operate(s, pos, "c", "$", n)
 	case "p", "P":
 		return v.paste(s, pos, m == "p", max(n, 1))
 	case "u":
-		return vimEdit{cmd: "undo", times: max(n, 1), cursor: pos}
+		return vimEdit{cmd: "undo", times: min(max(n, 1), maxUndo), cursor: pos}
 	case "<C-r>":
-		return vimEdit{cmd: "redo", times: max(n, 1), cursor: pos}
+		return vimEdit{cmd: "redo", times: min(max(n, 1), maxUndo), cursor: pos}
 	case ".":
-		return v.replay(s, pos)
+		return v.replay(s, pos, n)
 	}
 	return vimEdit{cursor: pos}
 }
@@ -424,38 +454,38 @@ func (v *vim) paste(s string, pos int, after bool, n int) vimEdit {
 	if after {
 		at = min(nextRune(s, pos), lineEnd(s, pos))
 	}
-	return vimEdit{from: at, to: at, insert: r, cursor: prevRune(s[:at]+r, at+len(r))}
+	return vimEdit{from: at, to: at, insert: r, cursor: at + prevRune(r, len(r))}
 }
 
-// replay repeats the last change at pos as one edit.
-func (v *vim) replay(s string, pos int) vimEdit {
+// replay repeats the last change at pos as one edit, with count n instead of
+// its own if given.
+func (v *vim) replay(s string, pos, n int) vimEdit {
 	d := v.last
 	if d.keys == nil {
 		return vimEdit{cursor: pos}
 	}
-	e := v.do(s, pos, d.keys)
-	n, c := s[:e.from]+e.insert+s[e.to:], e.cursor
-	if v.insert {
-		n = n[:c] + d.text + n[c:]
-		c = v.escape(n, c+len(d.text))
+	keys := d.keys
+	if n > 0 {
+		_, keys = count(keys)
+		if keys[0] == "d" || keys[0] == "c" || keys[0] == "y" {
+			_, rest := count(keys[1:])
+			keys = append([]string{keys[0]}, rest...)
+		}
+		keys = append(strings.Split(strconv.Itoa(n), ""), keys...)
 	}
+	e := v.do(s, pos, keys)
 	v.pending = nil
-	// The common prefix and suffix stay, cut at rune starts.
-	p := 0
-	for p < len(s) && p < len(n) && s[p] == n[p] {
-		p++
+	if !v.insert {
+		return e
 	}
-	for p > 0 && (p < len(s) && !utf8.RuneStart(s[p]) || p < len(n) && !utf8.RuneStart(n[p])) {
-		p--
+	// The cursor is in or after the edit, or the edit is empty.
+	if e.from == e.to && e.insert == "" {
+		e.from, e.to = e.cursor, e.cursor
 	}
-	q := 0
-	for q < len(s)-p && q < len(n)-p && s[len(s)-1-q] == n[len(n)-1-q] {
-		q++
-	}
-	for q > 0 && !utf8.RuneStart(s[len(s)-q]) {
-		q--
-	}
-	return vimEdit{from: p, to: len(s) - q, insert: n[p : len(n)-q], cursor: c}
+	i := e.cursor - e.from
+	e.insert = e.insert[:i] + d.text + e.insert[i:]
+	e.cursor = v.escape(s[:e.from]+e.insert+s[e.to:], e.cursor+len(d.text))
+	return e
 }
 
 // lineEnd returns the offset of the line break ending the line at pos, or len(s).
