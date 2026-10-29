@@ -2,6 +2,7 @@ package note
 
 import (
 	"net/url"
+	"path"
 	"regexp"
 	"slices"
 	"strings"
@@ -35,6 +36,33 @@ func (i Image) Path() string {
 func (i Image) Stem() string {
 	stem, _, _ := strings.Cut(i.Name, ".") // labels hold no dots
 	return stem
+}
+
+// MaxLabel is the length limit of an image name without its extension.
+const MaxLabel = 63
+
+// ImageLabel turns a file name without its extension into an image name
+// without extension, a DNS label, as the server names uploads.
+func ImageLabel(file string) string {
+	file = strings.TrimSuffix(file, path.Ext(file))
+	var b strings.Builder
+	dash := false
+	for _, r := range strings.ToLower(file) {
+		if (r < 'a' || r > 'z') && (r < '0' || r > '9') {
+			dash = b.Len() > 0
+			continue
+		}
+		if dash {
+			b.WriteByte('-')
+			dash = false
+		}
+		b.WriteRune(r)
+	}
+	s := strings.TrimRight(b.String()[:min(b.Len(), MaxLabel)], "-")
+	if s == "" {
+		return "image" // nothing of the name is left
+	}
+	return s
 }
 
 // ImageName matches an image's name: a DNS label of up to 63 lower case

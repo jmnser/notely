@@ -101,12 +101,12 @@ func runSync(server, dir string) error {
 	if err != nil {
 		return err
 	}
-	if dir = cmp.Or(dir, cfg.Daemon.Dir, "~/Notely"); strings.HasPrefix(dir, "~/") {
+	if dir = cmp.Or(dir, cfg.Daemon.Dir, "~/Notely"); dir == "~" || strings.HasPrefix(dir, "~/") {
 		home, err := os.UserHomeDir()
 		if err != nil {
 			return err
 		}
-		dir = filepath.Join(home, dir[2:])
+		dir = filepath.Join(home, dir[1:])
 	}
 	stateFile, err := statePath(c.base)
 	if err != nil {

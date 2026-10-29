@@ -34,13 +34,18 @@ func mirrored(t *testing.T) (d *daemon, other *client, token string) {
 	var cfg config
 	cfg.Server.User, cfg.Server.PasswordCommand = "joe", "echo pw"
 	dir := t.TempDir()
+	unlock, err := lockPath(filepath.Join(dir, ".notely"), "this directory")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(unlock)
 	root, err := os.OpenRoot(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { root.Close() })
 	st := &mirrorState{path: filepath.Join(t.TempDir(), "state.json"), Dir: dir, User: "joe", Files: map[string]entry{}}
-	d = &daemon{c: c, cfg: cfg, st: st, root: root, rejected: map[string]string{}}
+	d = &daemon{c: c, cfg: cfg, st: st, root: root, stateFile: st.path, rejected: map[string]string{}}
 	if err := d.signIn(t.Context()); err != nil {
 		t.Fatal(err)
 	}
@@ -318,4 +323,111 @@ func TestDaemonRun(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitFor("the pull", func() bool { return exists(d, "Theirs.md") })
+}
+
+func TestDaemonKeepsNotesWhenFilesAreGone(t *testing.T) {
+	d, other, token := mirrored(t)
+	writeFile(t, d, "Plan.md", "hello")
+	syncOK(t, d)
+	if err := os.Remove(filepath.Join(d.st.Dir, "Plan.md")); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.sync(t.Context()); err == nil {
+		t.Fatal("sync of an emptied directory succeeded")
+	}
+	if err := os.Remove(filepath.Join(d.st.Dir, ".notely.lock")); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, d, "Other.md", "x")
+	if err := d.sync(t.Context()); err == nil {
+		t.Fatal("sync of a recreated directory succeeded")
+	}
+	if len(remoteNotes(t, other, token)) != 1 {
+		t.Fatal("notes deleted")
+	}
+}
+
+func TestDaemonUnsyncedFileOlderThanServer(t *testing.T) {
+	d, other, token := mirrored(t)
+	n := note.Note{ID: "a", Title: "Plan", Body: "old", Updated: time.Now().Add(-time.Hour)}
+	writeFile(t, d, "Plan.md", string(notefile.EncodeMarkdown(n))) // e.g. left by a crash before the state was saved
+	n.Body = "newer"
+	if _, _, err := other.exchange(t.Context(), token, []note.Note{n}, nil); err != nil {
+		t.Fatal(err)
+	}
+	syncOK(t, d)
+	if got := remoteNotes(t, other, token)["Plan"]; got.Body != "newer" {
+		t.Fatalf("server has %q, want its newer version", got.Body)
+	}
+	if !strings.HasSuffix(readFile(t, d, "Plan.md"), "\nnewer") {
+		t.Fatalf("file = %q, want the server's version", readFile(t, d, "Plan.md"))
+	}
+}
+
+func TestDaemonCaseOnlyRename(t *testing.T) {
+	d, other, token := mirrored(t)
+	n := note.Note{ID: "a", Title: "Plan", Body: "x"}
+	if _, _, err := other.exchange(t.Context(), token, []note.Note{n}, nil); err != nil {
+		t.Fatal(err)
+	}
+	syncOK(t, d)
+	if exists(d, "plan.md") {
+		t.Skip("case-insensitive file system")
+	}
+	writeFile(t, d, "plan.md", "---\nnot synced")
+	n.Title = "plan"
+	if _, _, err := other.exchange(t.Context(), token, []note.Note{n}, nil); err != nil {
+		t.Fatal(err)
+	}
+	syncOK(t, d)
+	if readFile(t, d, "plan.md") != "---\nnot synced" || !exists(d, "plan-2.md") || exists(d, "Plan.md") {
+		t.Fatal("a file the daemon does not own was replaced")
+	}
+}
+
+func TestDaemonFileLosesItsFields(t *testing.T) {
+	d, other, token := mirrored(t)
+	n := note.Note{ID: "a", Kind: note.Drawing, Title: "Flow", Pinned: true, Body: `{"elements":[],"type":"excalidraw"}`}
+	if _, _, err := other.exchange(t.Context(), token, []note.Note{n}, nil); err != nil {
+		t.Fatal(err)
+	}
+	syncOK(t, d)
+	writeFile(t, d, "Flow.excalidraw", `{"type":"excalidraw","elements":[{"id":"x"}]}`) // saved by Excalidraw
+	syncOK(t, d)
+	notes := remoteNotes(t, other, token)
+	if got := notes["Flow"]; len(notes) != 1 || got.ID != "a" || !got.Pinned || !strings.Contains(got.Body, `"x"`) {
+		t.Fatalf("notes = %+v, want the same drawing changed", notes)
+	}
+	writeFile(t, d, "Flow.excalidraw", "")
+	syncOK(t, d)
+	if len(remoteNotes(t, other, token)) != 1 {
+		t.Fatal("emptied file deleted the note")
+	}
+}
+
+func TestDaemonImageMoves(t *testing.T) {
+	d, other, token := mirrored(t)
+	ctx := t.Context()
+	writeFile(t, d, "a.png", string(pngData(t, 1)))
+	writeFile(t, d, "b.png", string(pngData(t, 2)))
+	syncOK(t, d)
+	if err := os.Rename(filepath.Join(d.st.Dir, "a.png"), filepath.Join(d.st.Dir, "Sea Day.png")); err != nil {
+		t.Fatal(err)
+	}
+	syncOK(t, d)
+	if images, _ := other.images(ctx, token); len(images) != 2 || !exists(d, "sea-day.png") {
+		t.Fatalf("images = %+v, want a.png moved to sea-day.png", images)
+	}
+
+	if err := other.deleteImage(ctx, token, note.Image{Name: "b.png"}); err != nil { // meanwhile elsewhere
+		t.Fatal(err)
+	}
+	if err := os.Rename(filepath.Join(d.st.Dir, "b.png"), filepath.Join(d.st.Dir, "c.png")); err != nil {
+		t.Fatal(err)
+	}
+	syncOK(t, d)
+	images, _ := other.images(ctx, token)
+	if len(images) != 2 || images[0].Name != "c.png" && images[1].Name != "c.png" {
+		t.Fatalf("images = %+v, want c.png uploaded", images)
+	}
 }

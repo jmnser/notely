@@ -4,6 +4,7 @@ package main
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -45,6 +46,8 @@ type mirrorState struct {
 type entry struct {
 	ID      string    `json:"id,omitempty"` // a note's; empty for an image
 	Space   string    `json:"space,omitempty"`
+	Title   string    `json:"title,omitempty"` // a note's
+	Pinned  bool      `json:"pinned,omitempty"`
 	Sum     string    `json:"sum"` // SHA-256 of the content
 	Size    int64     `json:"size"`
 	ModTime time.Time `json:"mtime"`
@@ -61,17 +64,19 @@ type file struct {
 	large bool       // too large to sync
 	note  *note.Note // a changed note file, decoded
 	moved string     // the note's former path
+	known bool       // a note with an ID of a file not synced here, e.g. left by a crash
 }
 
 // daemon mirrors a user's notes and images to a directory: it pushes the
 // changes made there and writes the changes made elsewhere.
 type daemon struct {
-	c     *client
-	cfg   config
-	st    *mirrorState
-	root  *os.Root
-	files map[string]*file // found by the last scan
-	dirs  map[string]bool  // found by the last scan
+	c         *client
+	cfg       config
+	st        *mirrorState
+	root      *os.Root
+	stateFile string
+	files     map[string]*file // found by the last scan
+	dirs      map[string]bool  // found by the last scan
 	// rejected holds files the server or the daemon refused, by path, with
 	// their sum: they are left alone until they change.
 	rejected map[string]string
@@ -86,23 +91,27 @@ func runDaemon(ctx context.Context, c *client, cfg config, dir, stateFile string
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return err
-	}
 	unlock, err := lockPath(stateFile, "this server")
 	if err != nil {
 		return err
 	}
 	defer unlock()
+	st := &mirrorState{path: stateFile}
+	if err := loadJSON(stateFile, st); err != nil {
+		return err
+	}
+	if _, err := os.Stat(dir); errors.Is(err, fs.ErrNotExist) && st.Dir == dir && len(st.Files) > 0 {
+		// Syncing it empty would delete every note.
+		return fmt.Errorf("%s is missing; restore it, or remove %s to sync it anew", dir, stateFile)
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
 	unlockDir, err := lockPath(filepath.Join(dir, ".notely"), "this directory")
 	if err != nil {
 		return err
 	}
 	defer unlockDir()
-	st := &mirrorState{path: stateFile}
-	if err := loadJSON(stateFile, st); err != nil {
-		return err
-	}
 	if st.Dir != dir || st.User != cfg.Server.User {
 		if len(st.Files) > 0 && st.User != cfg.Server.User {
 			return fmt.Errorf("%s holds the notes of %s; sync another directory", st.Dir, st.User)
@@ -118,7 +127,7 @@ func runDaemon(ctx context.Context, c *client, cfg config, dir, stateFile string
 	}
 	defer root.Close() //nolint:errcheck // read only
 	c.id = randID()
-	d := &daemon{c: c, cfg: cfg, st: st, root: root, rejected: map[string]string{}}
+	d := &daemon{c: c, cfg: cfg, st: st, root: root, stateFile: stateFile, rejected: map[string]string{}}
 	log.Printf("syncing %s with %s", dir, c.base)
 	return d.run(ctx)
 }
@@ -131,7 +140,6 @@ func (d *daemon) run(ctx context.Context) error {
 		return err
 	}
 	defer w.Close() //nolint:errcheck // nothing to do about it
-	watched := map[string]bool{}
 	wake := make(chan struct{}, 1)
 	notify := func() {
 		select {
@@ -159,14 +167,13 @@ func (d *daemon) run(ctx context.Context) error {
 		}
 		if session != "" {
 			if err := d.sync(ctx); errors.Is(err, errSignedOut) {
-				d.st.Session = ""
+				d.st.Session = "" // signs in again on the next wake, not at once
 				d.save()
-				continue
 			} else if err != nil && ctx.Err() == nil {
 				log.Printf("sync: %v", err)
 			}
 		}
-		d.watch(w, watched)
+		d.watch(w)
 	wait:
 		for {
 			select {
@@ -214,26 +221,17 @@ func (d *daemon) listen(ctx context.Context, session string, notify func()) (sto
 	return stop
 }
 
-// watch adds the directories of the last scan to w.
-func (d *daemon) watch(w *fsnotify.Watcher, watched map[string]bool) {
+// watch adds the directories of the last scan to w; adding a watched one
+// again does nothing, a recreated one gets a new watch.
+func (d *daemon) watch(w *fsnotify.Watcher) {
 	dirs := maps.Clone(d.dirs)
 	if dirs == nil {
 		dirs = map[string]bool{}
 	}
 	dirs["."] = true
 	for dir := range dirs {
-		if watched[dir] {
-			continue
-		}
 		if err := w.Add(filepath.Join(d.st.Dir, filepath.FromSlash(dir))); err != nil {
 			log.Printf("watch %s: %v", dir, err)
-			continue
-		}
-		watched[dir] = true
-	}
-	for dir := range watched {
-		if !dirs[dir] {
-			delete(watched, dir) // removed: the watch is gone
 		}
 	}
 }
@@ -296,7 +294,24 @@ func (d *daemon) sync(ctx context.Context) error {
 // scan finds the note and image files, reading those changed since the last
 // sync. Dot files and symbolic links are left out.
 func (d *daemon) scan() error {
+	// The lock file goes with the directory: syncing a new, empty one would
+	// delete every note.
+	if _, err := d.root.Lstat(".notely.lock"); err != nil {
+		return fmt.Errorf("%s was removed; restart the daemon", d.st.Dir)
+	}
 	d.files, d.dirs = map[string]*file{}, map[string]bool{}
+	if err := d.walk(); err != nil {
+		return err
+	}
+	if len(d.files) == 0 && len(d.st.Files) > 0 {
+		return fmt.Errorf("all files in %s are gone; restore them, or stop the daemon and remove %s to sync anew",
+			d.st.Dir, d.stateFile)
+	}
+	return nil
+}
+
+// walk adds the note and image files to d.files and the directories to d.dirs.
+func (d *daemon) walk() error {
 	return fs.WalkDir(d.root.FS(), ".", func(p string, de fs.DirEntry, err error) error {
 		switch {
 		case err != nil:
@@ -354,6 +369,9 @@ func (d *daemon) reject(p, sum string, err error) {
 // notes.
 func (d *daemon) pushNotes(ctx context.Context) ([]note.Note, error) {
 	present := d.localNotes()
+	if err := d.compare(ctx); err != nil {
+		return nil, err
+	}
 	var push []note.Note
 	paths := map[string]string{} // ID → path of the pushed notes
 	for p, f := range d.files {
@@ -394,6 +412,43 @@ func (d *daemon) pushNotes(ctx context.Context) ([]note.Note, error) {
 	return remote, nil
 }
 
+// compare checks the notes of files not synced here against the server's:
+// a file that only differs in the updated time is taken as synced, an older
+// one is replaced by the server's version.
+func (d *daemon) compare(ctx context.Context) error {
+	var known []string
+	for _, p := range sortedKeys(d.files) {
+		if f := d.files[p]; f.known && f.note != nil {
+			known = append(known, p)
+		}
+	}
+	if len(known) == 0 {
+		return nil
+	}
+	remote, _, err := d.c.exchange(ctx, d.st.Session, nil, nil)
+	if err != nil {
+		return err
+	}
+	byID := map[string]note.Note{}
+	for _, r := range remote {
+		byID[r.ID] = r
+	}
+	for _, p := range known {
+		f := d.files[p]
+		r, ok := byID[f.note.ID]
+		switch {
+		case !ok:
+		case same(*f.note, r):
+			d.track(p, r, f.size, f.mod, f.sum)
+			f.note, f.clean = nil, true
+		case r.Updated.After(f.note.Updated):
+			d.st.Files[p] = entry{ID: r.ID, Space: r.Space} // pulled
+			f.note, f.clean = nil, true
+		}
+	}
+	return nil
+}
+
 // localNotes decodes the changed note files and returns the IDs found. A
 // file without front matter becomes a new note, named after the file in the
 // space of its directory, and gets front matter. A copied file gets a new
@@ -422,35 +477,33 @@ func (d *daemon) localNotes() map[string]bool {
 		if f.clean || !notefile.IsNote(p) {
 			continue
 		}
-		var n note.Note
-		err := errors.New("too large")
-		if !f.large {
-			n, err = notefile.Decode(f.data, path.Ext(p))
-		}
-		switch {
-		case err != nil && !f.large && untracked(f.data, path.Ext(p)):
-			list = append(list, changed{p: p, f: f, n: d.newNote(p, f.data), stale: true})
-		case err != nil:
-			d.reject(p, f.sum, err)
+		n, stale, ok := d.decodeNote(p, f, e)
+		if !ok {
 			if e.ID != "" {
 				present[e.ID] = true // not deleted
 			}
-		default:
-			list = append(list, changed{p: p, f: f, n: n})
-			if e.ID == n.ID {
-				owner[n.ID] = p
-			}
+			continue
 		}
+		if e.ID == n.ID {
+			owner[n.ID] = p
+		}
+		list = append(list, changed{p: p, f: f, n: n, stale: stale})
 	}
 	for _, c := range list {
-		if o, ok := owner[c.n.ID]; !c.stale && ok && o != c.p { // a copy
+		o, owned := owner[c.n.ID]
+		old, wasSynced := synced[c.n.ID]
+		switch {
+		case c.stale:
+		case owned && o != c.p: // a copy
 			c.n, c.stale = movedTo(c.n, o, c.p, d.spaceOf(path.Dir(c.p))), true
 			c.n.ID = randID()
-		} else if old, ok := synced[c.n.ID]; !c.stale && ok && old != c.p {
+		case wasSynced && old != c.p:
 			if _, still := d.files[old]; !still {
 				n := movedTo(c.n, old, c.p, d.spaceOf(path.Dir(c.p)))
 				c.n, c.f.moved, c.stale = n, old, n != c.n // the front matter follows
 			}
+		case !wasSynced:
+			c.f.known = true
 		}
 		owner[c.n.ID], present[c.n.ID] = c.p, true
 		if c.stale && !d.rewrite(c.p, c.f, c.n) {
@@ -459,6 +512,29 @@ func (d *daemon) localNotes() map[string]bool {
 		c.f.note = &c.n
 	}
 	return present
+}
+
+// decodeNote decodes the changed note file at p, last synced as e. ok is
+// false if it cannot be synced, stale if the file needs n's fields.
+func (d *daemon) decodeNote(p string, f *file, e entry) (n note.Note, stale, ok bool) {
+	if f.large { // rejected by the scan
+		return n, false, false
+	}
+	n, err := notefile.Decode(f.data, path.Ext(p))
+	switch {
+	case err == nil:
+		return n, false, true
+	case e.ID != "" && len(bytes.TrimSpace(f.data)) == 0: // maybe half written
+		err = errors.New("empty; delete the file to delete the note")
+	case untracked(f.data, path.Ext(p)):
+		n = d.newNote(p, f.data)
+		if e.ID != "" { // lost its fields, e.g. saved by Excalidraw: still the same note
+			n.ID, n.Space, n.Title, n.Pinned = e.ID, e.Space, cmp.Or(e.Title, n.Title), e.Pinned
+		}
+		return n, true, true
+	}
+	d.reject(p, f.sum, err)
+	return n, false, false
 }
 
 // untracked reports whether data, of a file with extension ext, has no notely
@@ -599,6 +675,8 @@ func (d *daemon) pull(p string, f *file, r note.Note) {
 		return
 	}
 	to := d.pathFor(r, p)
+	moved := p != "" && p != to
+	inPlace := moved && d.sameFile(p, to) // a case-only rename on a case-insensitive file system
 	data, err := notefile.Encode(r)
 	if err == nil {
 		err = d.write(to, data)
@@ -612,7 +690,10 @@ func (d *daemon) pull(p string, f *file, r note.Note) {
 		log.Printf("%s: %v", to, err)
 		return
 	}
-	if p != "" && p != to {
+	switch {
+	case inPlace:
+		delete(d.st.Files, p)
+	case moved:
 		d.remove(p)
 	}
 	d.track(to, r, info.Size(), info.ModTime(), sum(data))
@@ -621,7 +702,10 @@ func (d *daemon) pull(p string, f *file, r note.Note) {
 
 // track records the file at p as synced with note r.
 func (d *daemon) track(p string, r note.Note, size int64, mod time.Time, sum string) {
-	d.st.Files[p] = entry{ID: r.ID, Space: r.Space, Sum: sum, Size: size, ModTime: mod, Version: noteVersion(r)}
+	d.st.Files[p] = entry{
+		ID: r.ID, Space: r.Space, Title: r.Title, Pinned: r.Pinned,
+		Sum: sum, Size: size, ModTime: mod, Version: noteVersion(r),
+	}
 }
 
 // pathFor returns where note n belongs: old if it fits n's space and title,
@@ -637,7 +721,7 @@ func (d *daemon) pathFor(n note.Note, old string) string {
 		if i > 1 {
 			p = fmt.Sprintf("%s-%d%s", base, i, ext)
 		}
-		if _, err := d.root.Lstat(p); err != nil || strings.EqualFold(p, old) {
+		if _, err := d.root.Lstat(p); err != nil || p == old || strings.EqualFold(p, old) && d.sameFile(p, old) {
 			return p
 		}
 	}
@@ -656,8 +740,15 @@ func spaceDir(space string) string {
 }
 
 // pushImages uploads new and changed image files and deletes or moves the
-// images whose files are gone.
+// images whose files are gone. An image whose content is still in a file is
+// not deleted, so a move the server refused does not lose it.
 func (d *daemon) pushImages(ctx context.Context) error {
+	onDisk := map[string]bool{} // sums
+	for p, f := range d.files {
+		if isImage(p) {
+			onDisk[f.sum] = true
+		}
+	}
 	gone := map[string]string{} // path → sum of images whose files are gone
 	for p, e := range d.st.Files {
 		if _, ok := d.files[p]; !ok && e.ID == "" {
@@ -666,27 +757,10 @@ func (d *daemon) pushImages(ctx context.Context) error {
 	}
 	for _, p := range sortedKeys(d.files) {
 		f := d.files[p]
-		if f.clean || !isImage(p) || d.rejected[p] == f.sum {
+		if f.clean || f.large || !isImage(p) || d.rejected[p] == f.sum {
 			continue
 		}
-		space, name := d.spaceOf(path.Dir(p)), path.Base(p)
-		var img note.Image
-		var err error
-		if old, ok := movedFrom(gone, p, f.sum); ok {
-			delete(gone, old)
-			img, err = d.c.moveImage(ctx, d.st.Session, d.imageOf(old), space, strings.TrimSuffix(name, path.Ext(name)))
-			if err == nil {
-				delete(d.st.Files, old)
-			}
-		} else {
-			if _, ok := d.st.Files[p]; ok { // changed: replace it
-				if err := d.c.deleteImage(ctx, d.st.Session, d.imageOf(p)); err != nil && !errors.Is(err, errNotFound) {
-					return err
-				}
-				delete(d.st.Files, p)
-			}
-			img, err = d.c.addImage(ctx, d.st.Session, space, name, f.data)
-		}
+		img, err := d.pushImage(ctx, p, f, gone)
 		if _, bad := errors.AsType[badRequest](err); bad {
 			d.reject(p, f.sum, err)
 			continue
@@ -694,6 +768,10 @@ func (d *daemon) pushImages(ctx context.Context) error {
 			return err
 		}
 		to := path.Join(spaceDir(img.Space), img.Name)
+		if e, ok := d.st.Files[to]; to != p && ok && e.ID == "" {
+			d.reject(p, f.sum, fmt.Errorf("the same image as %s", to)) // stored once per space
+			continue
+		}
 		if to != p {
 			if _, err := d.root.Lstat(to); err == nil || d.root.Rename(p, to) != nil {
 				d.reject(p, f.sum, fmt.Errorf("stored as %s", img.Path()))
@@ -706,7 +784,10 @@ func (d *daemon) pushImages(ctx context.Context) error {
 		f.clean = true
 		log.Printf("pushed %s", to)
 	}
-	for p := range gone {
+	for _, p := range sortedKeys(gone) {
+		if onDisk[gone[p]] {
+			continue
+		}
 		if err := d.c.deleteImage(ctx, d.st.Session, d.imageOf(p)); err != nil && !errors.Is(err, errNotFound) {
 			return err
 		}
@@ -714,6 +795,48 @@ func (d *daemon) pushImages(ctx context.Context) error {
 		log.Printf("deleted %s", p)
 	}
 	return nil
+}
+
+// pushImage sends the image file at p: as a move of a file gone with the
+// same content, as a replacement of the image last synced at p, else as a
+// new image. A replacement is uploaded before the former image is deleted.
+func (d *daemon) pushImage(ctx context.Context, p string, f *file, gone map[string]string) (note.Image, error) {
+	space, name := d.spaceOf(path.Dir(p)), path.Base(p)
+	if old, ok := movedFrom(gone, p, f.sum); ok {
+		img, err := d.c.moveImage(ctx, d.st.Session, d.imageOf(old), space, note.ImageLabel(name))
+		if err == nil {
+			delete(gone, old)
+			delete(d.st.Files, old)
+			return img, nil
+		}
+		if !errors.Is(err, errNotFound) { // else deleted elsewhere: upload it
+			return img, err
+		}
+		delete(gone, old)
+		delete(d.st.Files, old)
+	}
+	img, err := d.c.addImage(ctx, d.st.Session, space, name, f.data)
+	e, replace := d.st.Files[p]
+	if err != nil || !replace || e.ID != "" {
+		return img, err
+	}
+	former := d.imageOf(p)
+	if img.Space == former.Space && img.Name == former.Name { // the same content
+		return img, nil
+	}
+	if e, ok := d.st.Files[path.Join(spaceDir(img.Space), img.Name)]; ok && e.ID == "" {
+		return img, nil // the same as another image, which stays
+	}
+	if err := d.c.deleteImage(ctx, d.st.Session, former); err != nil && !errors.Is(err, errNotFound) {
+		return img, err
+	}
+	delete(d.st.Files, p)
+	moved, err := d.c.moveImage(ctx, d.st.Session, img, former.Space, former.Stem())
+	if err != nil {
+		log.Printf("%s: %v", p, err)
+		return img, nil // the file takes the uploaded image's name
+	}
+	return moved, nil
 }
 
 // movedFrom returns the path in gone that the image at p with sum moved from.
@@ -788,6 +911,14 @@ func (d *daemon) pullImages(ctx context.Context, images []note.Image) error {
 func (d *daemon) unchanged(p string, f *file) bool {
 	info, err := d.root.Lstat(p)
 	return err == nil && info.Size() == f.size && info.ModTime().Equal(f.mod)
+}
+
+// sameFile reports whether a and b name the same file, e.g. differing only
+// in case on a case-insensitive file system.
+func (d *daemon) sameFile(a, b string) bool {
+	fa, errA := d.root.Stat(a)
+	fb, errB := d.root.Stat(b)
+	return errA == nil && errB == nil && os.SameFile(fa, fb)
 }
 
 // write replaces the file at p atomically and durably.
