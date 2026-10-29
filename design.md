@@ -157,6 +157,15 @@ A [Bubble Tea](https://github.com/charmbracelet/bubbletea) v2 client for the sam
 - It refuses plain HTTP except to loopback addresses and never follows redirects, so the password and token stay on the server's TLS connection.
 - Bubble Tea does not build for `js/wasm`; `main_wasm.go` is a stub so the wasm lint covers the module.
 
+### Sync daemon
+
+`notely -daemon` mirrors the notes and images to a directory (`-dir`, `daemon.dir`, default `~/Notely`), signing in with the password command; a wrong password stops it, as retrying would lock the user out.
+
+- Layout: a directory per space and subspace, each part named as on the server (`internal/notefile`, shared with it), with the server's file format: Markdown with front matter, `.excalidraw` drawings, images by name. Paths are derived from title and space, with `-2`, … on collisions; files it does not own are never replaced. All access goes through `os.Root`; dot files and symbolic links are skipped.
+- State lives in `~/.config/notely/<hash of the URL>.daemon.json` (mode 0600), apart from the terminal client's, so both can run: the session and each file as last synced (sum, size, modification time, server version). That base tells local from remote changes, a three-way sync: a file whose size or time changed is read and compared by sum. `<state>.lock` and `<dir>/.notely.lock` allow one daemon per server and per directory.
+- A sync scans the directory, pushes changed images (a file gone and one with the same content elsewhere is a move, which the server carries into the notes' references), then changed notes and deletions, and writes the server's notes and images unless their files changed meanwhile. Local changes win, as in the other clients. The front matter is authoritative, except that a moved or copied file takes its directory's space and its file name as title. Files without front matter are adopted as new notes; files the server rejects or that cannot be parsed are logged once and left alone until they change.
+- Syncs run on start, 500 ms after file changes settle (fsnotify: inotify, kqueue), on every change the server's event stream reports and every 30 s.
+
 ## Shared: `internal`
 
 - `note`: the `Note` model (space, title, Markdown body, pin), its sort order (pinned first, then newest), space paths, the space tree and the local-first merge.
@@ -190,7 +199,7 @@ Material Design 3 is implemented in plain CSS (`web/app.css`: M3 color, type, sh
 - Drawings are saved whole: concurrent edits on two devices keep the last one, not both. Drawings have no image tool; pasted images count towards their 2 MiB. The app refuses to save a drawing over that size. When the browser storage is full, synced drawings are left out of it and do not show offline. The terminal client lists drawings but only the web app shows and edits them.
 - Sessions and the last git backup results are lost on backend restart.
 - Git backup is one-way; edits made in the repository are not imported.
-- `notely` runs once per server and user account at a time.
+- `notely` runs once per server and user account at a time; `notely -daemon` once per server and per directory, and only syncs while it runs.
 - Run behind HTTPS beyond localhost: over plain HTTP the session cookie and password travel unencrypted.
 - Signing out leaves loaded images in the browser's cache, which keeps them for offline use.
 - The browser's `localStorage` holds about 5 MB, which caps the web app's offline copy; beyond it the app shows "Could not save on this device."
