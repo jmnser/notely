@@ -143,6 +143,10 @@ func (u *ui) OnMount(ctx app.Context) {
 		ctx.Dispatch(u.back)
 		return nil
 	}))
+	app.Window().Call("addEventListener", "keydown", app.FuncOf(func(_ app.Value, args []app.Value) any {
+		u.shortcut(ctx, args[0])
+		return nil
+	}))
 	for _, event := range []string{"online", "focus"} {
 		app.Window().Call("addEventListener", event, app.FuncOf(func(app.Value, []app.Value) any {
 			ctx.Dispatch(u.sync)
@@ -294,7 +298,7 @@ func (u *ui) Render() app.UI {
 			app.Div().Class("drawer-top").Body(
 				app.Label().Class("search").Body(
 					icon("search"),
-					app.Input().Type("search").Placeholder("Search notes").Aria("label", "Search notes").
+					app.Input().ID("search").Type("search").Placeholder("Search notes").Aria("label", "Search notes").
 						OnInput(u.ValueTo(&u.query)),
 				),
 				iconButton("add", "New note or space").Class("icon-button tonal").OnClick(func(app.Context, app.Event) {
@@ -543,6 +547,56 @@ func (u *ui) toggleDrawer(app.Context, app.Event) {
 	if err := u.ctx.LocalStorage().Set(drawerKey, u.drawer); err != nil {
 		app.Log(err)
 	}
+}
+
+// shortcut handles the app's keys: Ctrl or Cmd+L and / go to the search;
+// outside text fields e and i edit the open note, j and k scroll it.
+func (u *ui) shortcut(ctx app.Context, e app.Value) {
+	k := e.Get("key").String()
+	ctrl, alt := e.Get("ctrlKey").Bool() || e.Get("metaKey").Bool(), e.Get("altKey").Bool()
+	if u.signedOut || e.Get("isComposing").Bool() ||
+		!app.Window().Get("document").Call("querySelector", "dialog[open]").IsNull() {
+		return
+	}
+	if ctrl && !alt && !e.Get("shiftKey").Bool() && strings.EqualFold(k, "l") {
+		e.Call("preventDefault")
+		ctx.Dispatch(u.focusSearch)
+		return
+	}
+	cur := u.find(u.current)
+	t := e.Get("target")
+	if ctrl || alt || t.Get("isContentEditable").Bool() || slices.Contains([]string{"INPUT", "TEXTAREA", "SELECT"},
+		t.Get("tagName").String()) || cur != nil && cur.Kind == note.Drawing || // Excalidraw has its own keys
+		k != "/" && (cur == nil || u.editing) {
+		return
+	}
+	switch k {
+	case "/":
+		ctx.Dispatch(u.focusSearch)
+	case "e", "i":
+		ctx.Dispatch(func(ctx app.Context) { u.setEditing(ctx, true) })
+	case "j", "k":
+		dy := 64
+		if k == "k" {
+			dy = -dy
+		}
+		app.Window().GetElementByID("view").Call("scrollBy", 0, dy)
+	default:
+		return
+	}
+	e.Call("preventDefault")
+}
+
+// focusSearch shows the sidebar and focuses its search field.
+func (u *ui) focusSearch(ctx app.Context) {
+	if u.drawer {
+		u.toggleDrawer(ctx, app.Event{})
+	}
+	ctx.Defer(func(app.Context) {
+		el := app.Window().GetElementByID("search")
+		el.Call("focus")
+		el.Call("select")
+	})
 }
 
 // ask opens the dialog; value prefills its text field.
@@ -1027,11 +1081,11 @@ func (u *ui) normalKey(ctx app.Context, e app.Event) {
 		}
 		k = "<C-r>"
 	case k == "Escape":
-		if u.vim.pending == "" {
+		if u.vim.pending == nil && u.vim.visual == "" {
 			u.setEditing(ctx, false)
+			return
 		}
-		u.vim.pending = ""
-		return
+		k = "<Esc>"
 	case vimAliases[k] != "":
 		k = vimAliases[k]
 	case utf8.RuneCountInString(k) != 1:
@@ -1043,7 +1097,9 @@ func (u *ui) normalKey(ctx app.Context, e app.Event) {
 	a := u.vim.key(v, byteOffset(v, el.Get("selectionStart").Int()), k)
 	switch {
 	case a.cmd != "":
-		app.Window().Get("document").Call("execCommand", a.cmd)
+		for range a.times {
+			app.Window().Get("document").Call("execCommand", a.cmd)
+		}
 		v = el.Get("value").String()
 		a.cursor = clamp(v, byteOffset(v, el.Get("selectionStart").Int()))
 	case a.from != a.to || a.insert != "":
@@ -1062,14 +1118,14 @@ func (u *ui) beforeInput(_ app.Context, e app.Event) {
 }
 
 // vimCursor puts the cursor of the editor el, whose value is v, at byte
-// offset c. In Normal mode it selects the character there as a block cursor.
+// offset c. In Normal mode it selects the character there as a block cursor,
+// in Visual mode the selection.
 func (u *ui) vimCursor(el app.Value, v string, c int) {
-	c = min(c, len(v))
-	end := c
-	if u.vimOn && !u.vim.insert && c < lineEnd(v, c) {
-		end = nextRune(v, c)
+	from, to := min(c, len(v)), min(c, len(v))
+	if u.vimOn {
+		from, to = u.vim.selection(v, c)
 	}
-	el.Call("setSelectionRange", utf16Offset(v, c), utf16Offset(v, end))
+	el.Call("setSelectionRange", utf16Offset(v, from), utf16Offset(v, to))
 }
 
 func (u *ui) toggleVim(ctx app.Context, _ app.Event) {
@@ -1102,8 +1158,9 @@ func (u *ui) insertText(s string) {
 	v := el.Get("value").String()
 	from := byteOffset(v, el.Get("selectionStart").Int())
 	to := byteOffset(v, el.Get("selectionEnd").Int())
-	if u.vimOn && !u.vim.insert { // insert before the block cursor, not over it
+	if u.vimOn && !u.vim.insert { // insert before the block cursor or Visual selection
 		to = from
+		u.vim.reset()
 	}
 	u.replace(el, v, from, to, s)
 }

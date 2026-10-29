@@ -5,7 +5,7 @@ Self-hosted, offline-first Markdown notes, organised in spaces. A web app you ca
 - Markdown with task lists, Mermaid diagrams and images
 - Excalidraw drawings, on their own or embedded in notes
 - Spaces and sub-spaces, pinning and search
-- Optional Vim keys in the web editor
+- Keyboard shortcuts and optional Vim keys in the web editor
 - Works offline; changes sync when the server is reachable
 - Multiple users, with spaces shared between them
 - Per-user backup to a git repository
@@ -57,6 +57,10 @@ Members see and edit its notes and sub-spaces, stored in `<data>/shared/Family/`
 Images (PNG, JPEG, GIF, WebP, up to 2 MiB) are files in a space, listed with its notes and named after the uploaded file: `Beach Day.PNG` becomes `beach-day.png`. In edit mode, the image button or pasting an image uploads it next to the note and inserts `![Beach Day](beach-day.png)`; the gallery button lists the space's images to insert them again. The upload button on a space adds images to it. `![](Work/beach-day.png)` refers to an image in another space, `![](/beach-day.png)` to one in Notes. Renaming or moving an image changes the notes using it along.
 
 Type `Flow.excalidraw` in the New dialog to create a drawing, or embed one in a note with `![](Flow.excalidraw)`; clicking the embed opens it, or creates it if missing. `![](Work/Flow.excalidraw)` refers to a drawing in another space.
+
+## Keyboard
+
+In the web app, Ctrl+L (⌘L on a Mac) or `/` searches, `e` or `i` edits the open note, `j` and `k` scroll it and Escape ends editing. The keyboard button in edit mode turns on Vim keys for the editor: motions, operators, counts, `.`, Visual mode with `v` and `V`, `p`, `u` and Ctrl+R. They need a hardware keyboard.
 
 ## Git backup
 
