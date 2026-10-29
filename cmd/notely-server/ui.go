@@ -359,6 +359,7 @@ func (u *ui) Render() app.UI {
 					v := ctx.JSSrc().Get("value").String()
 					u.edit(func(n *note.Note) { n.Body = v })
 				}).
+				On("beforeinput", u.beforeInput).
 				OnKeyDown(func(ctx app.Context, e app.Event) {
 					if u.vimOn && !u.vim.insert {
 						u.normalKey(ctx, e)
@@ -964,7 +965,7 @@ func (u *ui) setEditing(ctx app.Context, on bool) {
 		return
 	}
 	u.editing = on
-	u.vim.insert, u.vim.pending = false, ""
+	u.vim.reset()
 	u.syncBack()
 	if on {
 		ctx.Defer(func(app.Context) { u.focusBody() })
@@ -1050,6 +1051,15 @@ func (u *ui) normalKey(ctx app.Context, e app.Event) {
 	u.vimCursor(el, v, a.cursor)
 }
 
+// beforeInput keeps the editor's text in Vim Normal mode from input without
+// a usable key name, such as on Android, and from menu paste. Undo and redo
+// stay.
+func (u *ui) beforeInput(_ app.Context, e app.Event) {
+	if u.vimOn && !u.vim.insert && !strings.HasPrefix(e.Get("inputType").String(), "history") {
+		e.PreventDefault()
+	}
+}
+
 // vimCursor puts the cursor of the editor el, whose value is v, at byte
 // offset c. In Normal mode it selects the character there as a block cursor.
 func (u *ui) vimCursor(el app.Value, v string, c int) {
@@ -1061,10 +1071,14 @@ func (u *ui) vimCursor(el app.Value, v string, c int) {
 	el.Call("setSelectionRange", utf16Offset(v, c), utf16Offset(v, end))
 }
 
-func (u *ui) toggleVim(app.Context, app.Event) {
+func (u *ui) toggleVim(ctx app.Context, _ app.Event) {
+	if u.vimOn { // drop the block cursor
+		el := app.Window().GetElementByID("body")
+		el.Call("setSelectionRange", el.Get("selectionStart"), el.Get("selectionStart"))
+	}
 	u.vimOn = !u.vimOn
-	u.vim.insert, u.vim.pending = false, ""
-	if err := u.ctx.LocalStorage().Set(vimModeKey, u.vimOn); err != nil {
+	u.vim.reset()
+	if err := ctx.LocalStorage().Set(vimModeKey, u.vimOn); err != nil {
 		app.Log(err)
 	}
 	u.focusBody()
@@ -1074,18 +1088,19 @@ func (u *ui) toggleVim(app.Context, app.Event) {
 func (u *ui) focusBody() {
 	el := app.Window().GetElementByID("body")
 	el.Call("focus")
-	v := el.Get("value").String()
-	c := byteOffset(v, el.Get("selectionStart").Int())
 	if u.vimOn {
-		c = clamp(v, c)
+		v := el.Get("value").String()
+		u.vimCursor(el, v, clamp(v, byteOffset(v, el.Get("selectionStart").Int())))
 	}
-	u.vimCursor(el, v, c)
 }
 
 // insertText replaces the editor's selection with s.
 func (u *ui) insertText(s string) {
 	el := app.Window().GetElementByID("body")
 	el.Call("focus")
+	if u.vimOn && !u.vim.insert { // insert before the block cursor, not over it
+		el.Call("setSelectionRange", el.Get("selectionStart"), el.Get("selectionStart"))
+	}
 	// execCommand keeps the browser's undo history and fires the input event.
 	if app.Window().Get("document").Call("execCommand", "insertText", false, s).Bool() {
 		return
@@ -1142,6 +1157,7 @@ func (u *ui) create(space, title, kind string) {
 	u.open(n.ID)
 	if kind != note.Drawing {
 		u.editing = true
+		u.vim.reset()
 		u.syncBack()
 	}
 	focus := "body"

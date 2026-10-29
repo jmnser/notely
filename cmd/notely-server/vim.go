@@ -13,8 +13,8 @@ type vim struct {
 	pending  string // keys waiting for the rest of a command, such as d or g
 	register string // last yanked or deleted text
 	linewise bool   // register holds whole lines, without the last line break
-	goal     int    // rune column j and k keep while the cursor stays at goalAt
-	goalAt   int
+	goal     int    // rune column j and k keep
+	goalAt   int    // cursor the goal is for, or -1
 }
 
 // vimEdit is the effect of a Normal mode key: replace s[from:to] with insert,
@@ -27,7 +27,9 @@ type vimEdit struct {
 }
 
 // vimAliases maps editing keys to their Normal mode commands.
-var vimAliases = map[string]string{"Backspace": "h", "Enter": "j"}
+var vimAliases = map[string]string{
+	"Backspace": "h", "Enter": "j", "ArrowLeft": "h", "ArrowDown": "j", "ArrowUp": "k", "ArrowRight": "l",
+}
 
 // motions move from byte offset pos of s.
 var motions = map[string]func(s string, pos int) int{
@@ -56,7 +58,7 @@ var motions = map[string]func(s string, pos int) int{
 	"w":  wordForward,
 	"b":  wordBack,
 	"e":  wordEnd,
-	"gg": func(string, int) int { return 0 },
+	"gg": func(s string, _ int) int { return firstNonBlank(s, 0) },
 	"G":  func(s string, _ int) int { return firstNonBlank(s, lineStart(s, len(s))) },
 }
 
@@ -102,10 +104,15 @@ func (v *vim) do(s string, pos int, k string) vimEdit {
 	return vimEdit{cursor: t}
 }
 
+// reset switches to Normal mode and forgets pending keys and the goal column.
+func (v *vim) reset() {
+	v.insert, v.pending, v.goalAt = false, "", -1
+}
+
 // escape switches to Normal mode with the cursor at pos, which steps back
 // onto the last inserted character.
 func (v *vim) escape(s string, pos int) int {
-	v.insert, v.pending = false, ""
+	v.reset()
 	if pos > lineStart(s, pos) {
 		return prevRune(s, pos)
 	}
@@ -116,11 +123,18 @@ func (v *vim) escape(s string, pos int) int {
 func (v *vim) command(s string, pos int, m string) vimEdit {
 	end := lineEnd(s, pos)
 	switch m {
-	case "i", "a", "I", "A":
+	case "i":
 		v.insert = true
-		return vimEdit{cursor: map[string]int{
-			"i": pos, "a": min(nextRune(s, pos), end), "I": firstNonBlank(s, pos), "A": end,
-		}[m]}
+		return vimEdit{cursor: pos}
+	case "a":
+		v.insert = true
+		return vimEdit{cursor: min(nextRune(s, pos), end)}
+	case "I":
+		v.insert = true
+		return vimEdit{cursor: firstNonBlank(s, pos)}
+	case "A":
+		v.insert = true
+		return vimEdit{cursor: end}
 	case "o":
 		v.insert = true
 		return vimEdit{from: end, to: end, insert: "\n", cursor: end + 1}
@@ -154,6 +168,9 @@ func (v *vim) operate(s string, pos int, op, m string) vimEdit {
 		if m != op {
 			t = motions[m](s, pos)
 		}
+		if (m == "j" || m == "k") && t == pos {
+			return vimEdit{cursor: pos} // no line to take along
+		}
 		from, to = lineStart(s, min(pos, t)), lineEnd(s, max(pos, t))
 	default:
 		f, ok := motions[m]
@@ -161,7 +178,7 @@ func (v *vim) operate(s string, pos int, op, m string) vimEdit {
 			return vimEdit{cursor: pos}
 		}
 		if m == "w" && op == "c" && !unicode.IsSpace(runeAt(s, pos)) {
-			f, m = wordEnd, "e" // cw changes to the end of the word
+			f, m = runEnd, "e" // cw changes to the end of the word
 		}
 		t := f(s, pos)
 		switch m {
@@ -209,7 +226,7 @@ func (v *vim) change(op string, from, to, cursor int) vimEdit {
 func (v *vim) paste(s string, pos int, after bool) vimEdit {
 	r := v.register
 	switch {
-	case r == "":
+	case r == "" && !v.linewise:
 		return vimEdit{cursor: pos}
 	case v.linewise && after:
 		end := lineEnd(s, pos)
@@ -310,11 +327,16 @@ func wordEnd(s string, pos int) int {
 	if i >= len(s) {
 		return pos
 	}
-	c := wordClass(runeAt(s, i))
-	for n := nextRune(s, i); n < len(s) && wordClass(runeAt(s, n)) == c; n = nextRune(s, n) {
-		i = n
+	return runEnd(s, i)
+}
+
+// runEnd returns the last rune of the run of one word class at pos.
+func runEnd(s string, pos int) int {
+	c := wordClass(runeAt(s, pos))
+	for n := nextRune(s, pos); n < len(s) && wordClass(runeAt(s, n)) == c; n = nextRune(s, n) {
+		pos = n
 	}
-	return i
+	return pos
 }
 
 // wordBack returns the start of the word before pos.
