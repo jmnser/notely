@@ -337,25 +337,33 @@ func (d *daemon) sync(ctx context.Context) error {
 	return d.pullImages(ctx, images)
 }
 
-// serverLost reports whether the server has none of the notes and images
-// synced before, apart from those pushed now.
+// serverLost reports whether the server has nothing but what this sync
+// pushed, while files were synced before: e.g. restored without its data.
 func (d *daemon) serverLost(remote []note.Note, images []note.Image) bool {
-	on := map[string]bool{} // IDs and image paths
-	for _, n := range remote {
-		on[n.ID] = true
-	}
-	for _, img := range images {
-		on[path.Join(d.spaceDir(img.Space), img.Name)] = true
-	}
+	pushed := map[string]bool{} // IDs and image paths
 	synced := false
-	for p, e := range d.st.Files {
-		if f, ok := d.files[p]; ok && (!f.clean || f.pushed || f.note != nil) {
-			continue
+	for p, f := range d.files {
+		switch {
+		case f.note != nil:
+			pushed[f.note.ID] = true
+		case f.pushed:
+			pushed[p] = true
 		}
-		if on[cmp.Or(e.ID, p)] {
+	}
+	for p := range d.st.Files {
+		if !pushed[p] && !pushed[d.st.Files[p].ID] {
+			synced = true
+		}
+	}
+	for _, n := range remote {
+		if !pushed[n.ID] {
 			return false
 		}
-		synced = true
+	}
+	for _, img := range images {
+		if !pushed[path.Join(d.spaceDir(img.Space), img.Name)] {
+			return false
+		}
 	}
 	return synced
 }
@@ -854,13 +862,27 @@ func (d *daemon) pathFor(n note.Note, old string) string {
 		if i > 1 {
 			p = fmt.Sprintf("%s-%d%s", base, i, ext)
 		}
-		if e, ok := d.st.Files[p]; ok && e.ID != n.ID {
+		if d.trackedElse(p, n.ID) {
 			continue // another note's, maybe moved away briefly
 		}
 		if _, err := d.root.Lstat(p); err != nil || p == old || strings.EqualFold(p, old) && d.sameFile(p, old) {
 			return p
 		}
 	}
+}
+
+// trackedElse reports whether p, also ignoring case, is synced as another
+// note than id.
+func (d *daemon) trackedElse(p, id string) bool {
+	if e, ok := d.st.Files[p]; ok {
+		return e.ID != id
+	}
+	for o, e := range d.st.Files {
+		if e.ID != id && strings.EqualFold(o, p) {
+			return true
+		}
+	}
+	return false
 }
 
 // spaceDir is the directory of space: a directory per subspace, named

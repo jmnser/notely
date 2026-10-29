@@ -549,16 +549,25 @@ func TestDaemonServerReset(t *testing.T) {
 	writeFile(t, d, "B.md", "b")
 	syncOK(t, d)
 	notes := remoteNotes(t, other, token)
-	// The server lost its data, then a client created a note.
+	// Deleted elsewhere while another note exists: synced as usual.
 	if _, _, err := other.exchange(t.Context(), token, []note.Note{{ID: "c", Title: "C"}},
-		[]string{notes["A"].ID, notes["B"].ID}); err != nil {
+		[]string{notes["A"].ID}); err != nil {
+		t.Fatal(err)
+	}
+	syncOK(t, d)
+	if exists(d, "A.md") || !exists(d, "C.md") {
+		t.Fatal("deletion elsewhere not synced")
+	}
+	// The server lost its data while a file was added here.
+	notes = remoteNotes(t, other, token)
+	if _, _, err := other.exchange(t.Context(), token, nil, []string{notes["B"].ID, notes["C"].ID}); err != nil {
 		t.Fatal(err)
 	}
 	writeFile(t, d, "New.md", "new")
 	if err := d.sync(t.Context()); err == nil {
 		t.Fatal("sync with a reset server succeeded")
 	}
-	if !exists(d, "A.md") || !exists(d, "B.md") {
+	if !exists(d, "B.md") || !exists(d, "C.md") {
 		t.Fatal("files removed")
 	}
 }
