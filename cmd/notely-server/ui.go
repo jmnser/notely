@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/maxence-charriere/go-app/v10/pkg/app"
 
@@ -21,6 +22,7 @@ const (
 	signedOutKey = "notely-signed-out" // signed out on this device, even if the server missed it
 	drawerKey    = "notely-drawer"     // the sidebar is collapsed
 	pinnedKey    = "notely-pinned"     // pinned space paths
+	vimModeKey   = "notely-vim"        // the editor uses Vim keys
 	defaultSpace = note.DefaultSpace
 )
 
@@ -57,6 +59,8 @@ type ui struct {
 	current    string          // ID of the open note
 	from       string          // ID of the note the open drawing was opened from
 	editing    bool            // the open note shows its Markdown source
+	vimOn      bool            // the editor uses Vim keys, kept on this device
+	vim        vim             // the editor's Vim state
 	collapsed  map[string]bool // space paths whose content is hidden
 	drawer     bool            // the sidebar is collapsed to a rail on large screens
 	pinned     map[string]bool // pinned space paths, kept on this device
@@ -107,7 +111,7 @@ func (u *ui) OnMount(ctx app.Context) {
 	u.dirty = map[string]int{}
 	u.collapsed = map[string]bool{}
 	var pinned []string
-	for k, v := range map[string]any{drawerKey: &u.drawer, pinnedKey: &pinned} {
+	for k, v := range map[string]any{drawerKey: &u.drawer, pinnedKey: &pinned, vimModeKey: &u.vimOn} {
 		if err := ctx.LocalStorage().Get(k, v); err != nil {
 			app.Log(err)
 		}
@@ -265,6 +269,13 @@ func (u *ui) Render() app.UI {
 	if u.dialog.danger {
 		danger += " danger"
 	}
+	vimButton, bodyClass := "icon-button", ""
+	if u.vimOn {
+		vimButton += " selected"
+		if !u.vim.insert {
+			bodyClass = "vim-normal"
+		}
+	}
 
 	if u.mounted {
 		u.ctx.Defer(func(app.Context) {
@@ -327,6 +338,8 @@ func (u *ui) Render() app.UI {
 						app.Window().GetElementByID("image-file").Call("click")
 					}),
 					iconButton("photo_library", "Images in this space").Hidden(!u.editing).OnClick(u.openGallery),
+					iconButton("keyboard", "Vim keys").Class(vimButton).Aria("pressed", u.vimOn).
+						Hidden(!u.editing).OnClick(u.toggleVim),
 					iconButton("move", "Move to space").OnClick(u.move),
 					pinButton("Pin", cur != nil && cur.Pinned).
 						OnClick(func(app.Context, app.Event) { u.togglePin(u.current) }),
@@ -341,15 +354,25 @@ func (u *ui) Render() app.UI {
 			app.Div().ID("view").Title("Double-click to edit").Hidden(u.editing || drawing).
 				OnClick(u.check).OnDblClick(u.startEdit).Body(app.Raw(u.rendered(body))),
 			app.Textarea().ID("body").Placeholder("Write Markdown…").MaxLength(100000).Aria("label", "Note").
-				Hidden(!u.editing || drawing).
+				Hidden(!u.editing || drawing).Class(bodyClass).
 				OnInput(func(ctx app.Context, _ app.Event) {
 					v := ctx.JSSrc().Get("value").String()
 					u.edit(func(n *note.Note) { n.Body = v })
 				}).
 				OnKeyDown(func(ctx app.Context, e app.Event) {
+					if u.vimOn && !u.vim.insert {
+						u.normalKey(ctx, e)
+						return
+					}
 					switch e.Get("key").String() {
 					case "Escape":
-						u.setEditing(ctx, false)
+						if !u.vimOn {
+							u.setEditing(ctx, false)
+							return
+						}
+						el := ctx.JSSrc()
+						v := el.Get("value").String()
+						u.vimCursor(el, v, u.vim.escape(v, byteOffset(v, el.Get("selectionStart").Int())))
 					case "Enter":
 						u.newline(ctx, e)
 					}
@@ -941,9 +964,10 @@ func (u *ui) setEditing(ctx app.Context, on bool) {
 		return
 	}
 	u.editing = on
+	u.vim.insert, u.vim.pending = false, ""
 	u.syncBack()
 	if on {
-		ctx.Defer(func(app.Context) { app.Window().GetElementByID("body").Call("focus") })
+		ctx.Defer(func(app.Context) { u.focusBody() })
 	}
 }
 
@@ -965,20 +989,97 @@ func (u *ui) newline(ctx app.Context, e app.Event) {
 		return
 	}
 	e.PreventDefault()
+	u.replace(el, v, from, to, insert)
+}
+
+// replace replaces v[from:to] of the editor el, whose value is v, with s and
+// returns the new value.
+func (u *ui) replace(el app.Value, v string, from, to int, s string) string {
 	el.Call("setSelectionRange", utf16Offset(v, from), utf16Offset(v, to))
 	cmd := "insertText"
-	if insert == "" {
+	if s == "" {
 		cmd = "delete"
 	}
 	// execCommand keeps the browser's undo history and fires the input event.
-	if app.Window().Get("document").Call("execCommand", cmd, false, insert).Bool() {
-		return
+	if app.Window().Get("document").Call("execCommand", cmd, false, s).Bool() {
+		return el.Get("value").String()
 	}
-	v = v[:from] + insert + v[to:]
+	v = v[:from] + s + v[to:]
 	el.Set("value", v)
-	c := utf16Offset(v, from+len(insert))
+	c := utf16Offset(v, from+len(s))
 	el.Call("setSelectionRange", c, c)
 	u.edit(func(n *note.Note) { n.Body = v })
+	return v
+}
+
+// normalKey handles a key in the editor's Vim Normal mode. Shortcuts and keys
+// that only move, such as the arrow keys, keep their default.
+func (u *ui) normalKey(ctx app.Context, e app.Event) {
+	k := e.Get("key").String()
+	switch {
+	case e.Get("isComposing").Bool(), e.Get("metaKey").Bool(), e.Get("altKey").Bool():
+		return
+	case e.Get("ctrlKey").Bool():
+		if k != "r" {
+			return
+		}
+		k = "<C-r>"
+	case k == "Escape":
+		if u.vim.pending == "" {
+			u.setEditing(ctx, false)
+		}
+		u.vim.pending = ""
+		return
+	case vimAliases[k] != "":
+		k = vimAliases[k]
+	case utf8.RuneCountInString(k) != 1:
+		return
+	}
+	e.PreventDefault()
+	el := ctx.JSSrc()
+	v := el.Get("value").String()
+	a := u.vim.key(v, byteOffset(v, el.Get("selectionStart").Int()), k)
+	switch {
+	case a.cmd != "":
+		app.Window().Get("document").Call("execCommand", a.cmd)
+		v = el.Get("value").String()
+		a.cursor = clamp(v, byteOffset(v, el.Get("selectionStart").Int()))
+	case a.from != a.to || a.insert != "":
+		v = u.replace(el, v, a.from, a.to, a.insert)
+	}
+	u.vimCursor(el, v, a.cursor)
+}
+
+// vimCursor puts the cursor of the editor el, whose value is v, at byte
+// offset c. In Normal mode it selects the character there as a block cursor.
+func (u *ui) vimCursor(el app.Value, v string, c int) {
+	c = min(c, len(v))
+	end := c
+	if u.vimOn && !u.vim.insert && c < lineEnd(v, c) {
+		end = nextRune(v, c)
+	}
+	el.Call("setSelectionRange", utf16Offset(v, c), utf16Offset(v, end))
+}
+
+func (u *ui) toggleVim(app.Context, app.Event) {
+	u.vimOn = !u.vimOn
+	u.vim.insert, u.vim.pending = false, ""
+	if err := u.ctx.LocalStorage().Set(vimModeKey, u.vimOn); err != nil {
+		app.Log(err)
+	}
+	u.focusBody()
+}
+
+// focusBody focuses the editor, with a block cursor in Vim Normal mode.
+func (u *ui) focusBody() {
+	el := app.Window().GetElementByID("body")
+	el.Call("focus")
+	v := el.Get("value").String()
+	c := byteOffset(v, el.Get("selectionStart").Int())
+	if u.vimOn {
+		c = clamp(v, c)
+	}
+	u.vimCursor(el, v, c)
 }
 
 // insertText replaces the editor's selection with s.
