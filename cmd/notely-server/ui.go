@@ -143,6 +143,10 @@ func (u *ui) OnMount(ctx app.Context) {
 		ctx.Dispatch(u.back)
 		return nil
 	}))
+	app.Window().Call("addEventListener", "keydown", app.FuncOf(func(_ app.Value, args []app.Value) any {
+		u.shortcut(ctx, args[0])
+		return nil
+	}))
 	for _, event := range []string{"online", "focus"} {
 		app.Window().Call("addEventListener", event, app.FuncOf(func(app.Value, []app.Value) any {
 			ctx.Dispatch(u.sync)
@@ -294,7 +298,7 @@ func (u *ui) Render() app.UI {
 			app.Div().Class("drawer-top").Body(
 				app.Label().Class("search").Body(
 					icon("search"),
-					app.Input().Type("search").Placeholder("Search notes").Aria("label", "Search notes").
+					app.Input().ID("search").Type("search").Placeholder("Search notes").Aria("label", "Search notes").
 						OnInput(u.ValueTo(&u.query)),
 				),
 				iconButton("add", "New note or space").Class("icon-button tonal").OnClick(func(app.Context, app.Event) {
@@ -543,6 +547,71 @@ func (u *ui) toggleDrawer(app.Context, app.Event) {
 	if err := u.ctx.LocalStorage().Set(drawerKey, u.drawer); err != nil {
 		app.Log(err)
 	}
+}
+
+// shortcut handles the app's keys: Ctrl or Cmd+L and / go to the search;
+// outside text fields e and i edit the open note, j and k scroll it. It runs
+// outside Dispatch, as preventDefault must happen before it returns.
+func (u *ui) shortcut(ctx app.Context, e app.Value) {
+	k := e.Get("key").String()
+	ctrl, alt := e.Get("ctrlKey").Bool() || e.Get("metaKey").Bool(), e.Get("altKey").Bool()
+	search := ctrl && !alt && !e.Get("shiftKey").Bool() && strings.EqualFold(k, "l")
+	if !search && (ctrl || alt || e.Get("repeat").Bool() || typing(e.Get("target"))) ||
+		e.Get("defaultPrevented").Bool() || e.Get("isComposing").Bool() || u.signedOut ||
+		!app.Window().Get("document").Call("querySelector", "dialog[open]").IsNull() {
+		return
+	}
+	cur := u.find(u.current)
+	if cur != nil && cur.Kind == note.Drawing { // Excalidraw has its own keys
+		return
+	}
+	switch {
+	case search || k == "/":
+		ctx.Dispatch(u.focusSearch)
+	case cur == nil || u.editing:
+		return
+	case k == "e" || k == "i":
+		ctx.Dispatch(func(ctx app.Context) {
+			u.setEditing(ctx, true)
+			u.vim.insert = k == "i" // with Vim keys, i starts typing
+		})
+	case k == "j" || k == "k":
+		dy := 64
+		if k == "k" {
+			dy = -dy
+		}
+		app.Window().GetElementByID("view").Call("scrollBy", 0, dy)
+	default:
+		return
+	}
+	e.Call("preventDefault")
+}
+
+// typing reports whether element t takes text.
+func typing(t app.Value) bool {
+	switch t.Get("tagName").String() {
+	case "TEXTAREA", "SELECT":
+		return true
+	case "INPUT":
+		return !slices.Contains([]string{"checkbox", "radio", "button", "submit"}, t.Get("type").String())
+	}
+	return t.Get("isContentEditable").Bool()
+}
+
+// focusSearch shows the sidebar and focuses its search field.
+func (u *ui) focusSearch(ctx app.Context) {
+	if u.drawer {
+		u.toggleDrawer(ctx, app.Event{})
+	}
+	if app.Window().Call("matchMedia", "(max-width: 600px)").Get("matches").Bool() {
+		u.openImage("") // the list, notes and images share the screen
+		u.open("")
+	}
+	ctx.Defer(func(app.Context) {
+		el := app.Window().GetElementByID("search")
+		el.Call("focus")
+		el.Call("select")
+	})
 }
 
 // ask opens the dialog; value prefills its text field.
@@ -1016,6 +1085,15 @@ func (u *ui) replace(el app.Value, v string, from, to int, s string) string {
 // normalKey handles a key in the editor's Vim Normal mode. Shortcuts, Shift
 // with an arrow key and other keys without a Vim meaning keep their default.
 func (u *ui) normalKey(ctx app.Context, e app.Event) {
+	el := ctx.JSSrc()
+	v := el.Get("value").String()
+	if u.vim.visual != "" { // a click, Shift selection or undo since ends Visual mode
+		from, to := u.vim.selection(v, u.vim.at)
+		if v != u.vim.seen || el.Get("selectionStart").Int() != utf16Offset(v, from) ||
+			el.Get("selectionEnd").Int() != utf16Offset(v, to) {
+			u.vim.visual = ""
+		}
+	}
 	k := e.Get("key").String()
 	switch {
 	case e.Get("isComposing").Bool(), e.Get("metaKey").Bool(), e.Get("altKey").Bool(),
@@ -1027,23 +1105,25 @@ func (u *ui) normalKey(ctx app.Context, e app.Event) {
 		}
 		k = "<C-r>"
 	case k == "Escape":
-		if u.vim.pending == "" {
+		if u.vim.pending == nil && u.vim.visual == "" {
 			u.setEditing(ctx, false)
+			return
 		}
-		u.vim.pending = ""
-		return
+		k = "<Esc>"
 	case vimAliases[k] != "":
 		k = vimAliases[k]
 	case utf8.RuneCountInString(k) != 1:
 		return
 	}
 	e.PreventDefault()
-	el := ctx.JSSrc()
-	v := el.Get("value").String()
 	a := u.vim.key(v, byteOffset(v, el.Get("selectionStart").Int()), k)
 	switch {
 	case a.cmd != "":
-		app.Window().Get("document").Call("execCommand", a.cmd)
+		for range a.times {
+			if !app.Window().Get("document").Call("execCommand", a.cmd).Bool() {
+				break
+			}
+		}
 		v = el.Get("value").String()
 		a.cursor = clamp(v, byteOffset(v, el.Get("selectionStart").Int()))
 	case a.from != a.to || a.insert != "":
@@ -1062,14 +1142,19 @@ func (u *ui) beforeInput(_ app.Context, e app.Event) {
 }
 
 // vimCursor puts the cursor of the editor el, whose value is v, at byte
-// offset c. In Normal mode it selects the character there as a block cursor.
+// offset c. In Normal mode it selects the character there as a block cursor,
+// in Visual mode the selection.
 func (u *ui) vimCursor(el app.Value, v string, c int) {
-	c = min(c, len(v))
-	end := c
-	if u.vimOn && !u.vim.insert && c < lineEnd(v, c) {
-		end = nextRune(v, c)
+	from := min(c, len(v))
+	to := from
+	if u.vimOn {
+		from, to = u.vim.selection(v, c)
 	}
-	el.Call("setSelectionRange", utf16Offset(v, c), utf16Offset(v, end))
+	dir := "forward" // the browser keeps the cursor end in view
+	if u.vim.visual != "" && c < u.vim.anchor {
+		dir = "backward"
+	}
+	el.Call("setSelectionRange", utf16Offset(v, from), utf16Offset(v, to), dir)
 }
 
 func (u *ui) toggleVim(ctx app.Context, _ app.Event) {
@@ -1102,8 +1187,9 @@ func (u *ui) insertText(s string) {
 	v := el.Get("value").String()
 	from := byteOffset(v, el.Get("selectionStart").Int())
 	to := byteOffset(v, el.Get("selectionEnd").Int())
-	if u.vimOn && !u.vim.insert { // insert before the block cursor, not over it
+	if u.vimOn && !u.vim.insert { // insert before the block cursor or Visual selection
 		to = from
+		u.vim.reset()
 	}
 	u.replace(el, v, from, to, s)
 }

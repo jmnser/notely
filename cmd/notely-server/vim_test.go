@@ -7,7 +7,7 @@ import (
 
 func TestVim(t *testing.T) {
 	tests := []struct {
-		in, keys, want string // | marks the cursor; keys are typed in Normal mode
+		in, keys, want string // | marks the cursor; keys start in Normal mode, \x1b is Escape
 		insert         bool
 	}{
 		{"a|bc", "h", "|abc", false},
@@ -80,13 +80,65 @@ func TestVim(t *testing.T) {
 		{"|ab", "p", "|ab", false},
 		{"|ab", "dx", "|ab", false},
 		{"|ab", "gx", "|ab", false},
+		{"|a b c d", "2w", "a b |c d", false},
+		{"|abcd", "3x", "|d", false},
+		{"|abcd", "10x", "|", false},
+		{"|a\nb\nc\nd", "2dd", "|c\nd", false},
+		{"|a\nb\nc\nd", "d2j", "|d", false},
+		{"|a\nb\nc\nd", "3G", "a\nb\n|c\nd", false},
+		{"a\nb\n|c", "1G", "|a\nb\nc", false},
+		{"|a b c", "d2w", "|c", false},
+		{"|a b c d", "2d2w", "|", false},
+		{"|ab", "yl3p", "aaa|ab", false},
+		{"|a\nb", "yy2p", "a\n|a\na\nb", false},
+		{"|foo bar baz", "c2wx\x1b", "|x baz", false},
+		{"|a b c", "dw.", "|c", false},
+		{"|a b c d e", "2dw.", "|e", false},
+		{"|foo foo", "cwbar\x1bw.", "bar ba|r", false},
+		{"|a\nb", "Ax\x1bj.", "ax\nb|x", false},
+		{"|ab", "ix\x1b.", "|xxab", false},
+		{"|a\nb", "ox\x1b.", "a\nx\n|x\nb", false},
+		{"|ab", "x.", "|", false},
+		{"|a", ".", "|a", false},
+		{"|abcd", "vld", "|cd", false},
+		{"a|bcd", "vlly$p", "abcdbc|d", false},
+		{"|abcd", "vllold", "a|d", false},
+		{"a\n|b\nc", "Vjd", "|a", false},
+		{"|a\nb\nc", "Vy2jp", "a\nb\nc\n|a", false},
+		{"|abc", "vlc", "|c", true},
+		{"|ab", "vVd", "|", false},
+		{"|ab cd", "vd.", "|b cd", false},
+		{"|ab", "vvx", "|b", false},
+		{"|ab", "vl\x1bx", "|a", false},
+		{"|a b c d e f", "dw3.", "|e f", false},
+		{"|a b c d e f", "2dw.", "|e f", false},
+		{"|a\nb\nc", "2D", "|\nc", false},
+		{"|ab\ncd", "2$", "ab\nc|d", false},
+		{"|ab\ncd", "v$d", "|cd", false},
+		{"|abc\nd", "v$jhd", "|", false},
+		{"|abc", "9999l", "ab|c", false},
+		{"abc|def\nx\ny\nabcdef", "j2j", "abcdef\nx\ny\nabc|def", false},
+		{"abc|def\nx\nabcdef", "jd\x1bj", "abcdef\nx\nabc|def", false},
+		{"abc|def\nx\nabcdef", "jvjd", "abcdef\n|ef", false},
+		{"|   \nx", "v$^d", "|\nx", false},
 	}
 	for _, tt := range tests {
 		pos := strings.Index(tt.in, "|")
 		s := strings.Replace(tt.in, "|", "", 1)
 		var v vim
 		for _, k := range tt.keys {
+			if v.insert { // type, as the browser does
+				if k == '\x1b' {
+					pos = v.escape(s, pos)
+				} else {
+					s, pos = s[:pos]+string(k)+s[pos:], pos+len(string(k))
+				}
+				continue
+			}
 			key := string(k)
+			if k == '\x1b' {
+				key = "<Esc>"
+			}
 			if a, ok := map[rune]string{'\r': "Enter", '\b': "Backspace"}[k]; ok {
 				key = vimAliases[a]
 			}
@@ -100,8 +152,8 @@ func TestVim(t *testing.T) {
 }
 
 func TestVimEscape(t *testing.T) {
-	v := vim{insert: true, pending: "d"}
-	if got := v.escape("ab", 2); got != 1 || v.insert || v.pending != "" {
+	v := vim{insert: true, pending: []string{"d"}}
+	if got := v.escape("ab", 2); got != 1 || v.insert || v.pending != nil {
 		t.Errorf("escape = %d, %+v", got, v)
 	}
 	if got := v.escape("a\nb", 2); got != 2 {
@@ -109,10 +161,51 @@ func TestVimEscape(t *testing.T) {
 	}
 }
 
+func TestVimSelection(t *testing.T) {
+	tests := []struct {
+		v        vim
+		s        string
+		c        int
+		from, to int
+	}{
+		{vim{}, "ab", 1, 1, 2},
+		{vim{}, "a\nb", 1, 1, 1},
+		{vim{insert: true}, "ab", 1, 1, 1},
+		{vim{visual: "v", anchor: 3}, "ab\ncd", 1, 1, 4},
+		{vim{visual: "V", anchor: 0}, "ab\ncd\nef", 3, 0, 6},
+		{vim{visual: "V", anchor: 9}, "ab", 0, 0, 2},
+	}
+	for _, tt := range tests {
+		if from, to := tt.v.selection(tt.s, tt.c); from != tt.from || to != tt.to {
+			t.Errorf("%+v %q %d: got %d-%d, want %d-%d", tt.v, tt.s, tt.c, from, to, tt.from, tt.to)
+		}
+	}
+}
+
+func TestVimDotText(t *testing.T) {
+	v := vim{change: []string{"i"}, insAt: 1, insText: "ab"}
+	if v.escape("axyb", 3); v.last.text != "xy" {
+		t.Errorf("typed: got %+v", v.last)
+	}
+	v = vim{last: dot{keys: []string{"x"}}, change: []string{"i"}, insAt: 1, insText: "ab"}
+	if v.escape("zb", 1); v.last.keys != nil { // the text before changed
+		t.Errorf("edited elsewhere: got %+v", v.last)
+	}
+}
+
+func TestVimVisualTextChanged(t *testing.T) {
+	var v vim
+	v.key("abc", 0, "v")
+	v.key("abc", 0, "l")
+	if e := v.key("ab", 0, "d"); v.visual != "" || e.from != e.to || len(v.pending) != 1 { // Visual mode ended, d waits
+		t.Errorf("got %+v, %+v", e, v)
+	}
+}
+
 func TestVimUndo(t *testing.T) {
 	var v vim
 	for k, want := range map[string]string{"u": "undo", "<C-r>": "redo"} {
-		if e := v.key("ab", 1, k); e.cmd != want || e.cursor != 1 {
+		if e := v.key("ab", 1, k); e.cmd != want || e.times != 1 || e.cursor != 1 {
 			t.Errorf("%s: got %+v", k, e)
 		}
 	}
