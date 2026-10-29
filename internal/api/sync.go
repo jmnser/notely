@@ -32,6 +32,7 @@ import (
 
 	"github.com/jmnser/notely/internal/atomicfile"
 	"github.com/jmnser/notely/internal/note"
+	"github.com/jmnser/notely/internal/notefile"
 )
 
 // syncTimeout bounds one user's sync, so a remote that stops answering cannot
@@ -487,7 +488,7 @@ func mirrorFrom(src mirrorSource, to *os.Root, files map[string]bool) error {
 			return nil
 		case !d.Type().IsRegular():
 			return nil
-		case !noteFile(rel) && !note.ImageName.MatchString(d.Name()):
+		case !notefile.IsNote(rel) && !note.ImageName.MatchString(d.Name()):
 			return nil
 		}
 		out := path.Join(src.prefix, rel)

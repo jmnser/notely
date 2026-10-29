@@ -2,7 +2,8 @@
 
 // Command notely is a terminal client for a notely server. It keeps a copy
 // of the notes, so they can be read and edited offline, and syncs changes in
-// the background.
+// the background. With -daemon it instead keeps the notes and images in a
+// directory in sync with the server.
 package main
 
 import (
@@ -13,7 +14,9 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"runtime/debug"
+	"strings"
 	"syscall"
 
 	tea "charm.land/bubbletea/v2"
@@ -26,33 +29,31 @@ func main() {
 	initialize := flag.Bool("init", false, "write a starter config that reads the password from the system keychain")
 	logout := flag.Bool("logout", false, "sign out and remove the notes from this device")
 	force := flag.Bool("force", false, "with -logout: also when changes are not synced or the server is unreachable")
+	daemon := flag.Bool("daemon", false, "keep the notes and images in a directory in sync with the server")
+	dir := flag.String("dir", "", "with -daemon: the directory (default the config's daemon.dir, else ~/Notely)")
 	showVersion := flag.Bool("version", false, "print the version and exit")
 	flag.Parse()
 	if *showVersion {
 		fmt.Println("notely", buildVersion())
 		return
 	}
-	if err := run(*server, *user, *initialize, *logout, *force); err != nil {
+	var err error
+	if *daemon {
+		err = runSync(*server, *dir)
+	} else {
+		err = run(*server, *user, *initialize, *logout, *force)
+	}
+	if err != nil {
 		fmt.Fprintln(os.Stderr, "notely:", err)
 		os.Exit(1)
 	}
 }
 
 func run(server, user string, initialize, logout, force bool) error {
-	path, err := configPath()
+	path, cfg, c, err := setup(server)
 	if err != nil {
 		return err
 	}
-	cfg, err := loadConfig(path)
-	if err != nil {
-		return err
-	}
-	server = cmp.Or(server, os.Getenv("NOTELY_SERVER"), cfg.Server.URL, "http://localhost:8000")
-	c, err := newClient(server)
-	if err != nil {
-		return err
-	}
-	cfg = forServer(cfg, c.base)
 	if initialize {
 		user = cmp.Or(user, os.Getenv("USER"), os.Getenv("USERNAME"))
 		store, err := initConfig(path, c.base, user)
@@ -92,6 +93,47 @@ func run(server, user string, initialize, logout, force bool) error {
 		return nil
 	}
 	return err
+}
+
+// runSync runs the daemon until SIGINT or SIGTERM.
+func runSync(server, dir string) error {
+	_, cfg, c, err := setup(server)
+	if err != nil {
+		return err
+	}
+	if dir = cmp.Or(dir, cfg.Daemon.Dir, "~/Notely"); dir == "~" || strings.HasPrefix(dir, "~/") {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return err
+		}
+		dir = filepath.Join(home, dir[1:])
+	}
+	stateFile, err := statePath(c.base)
+	if err != nil {
+		return err
+	}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	return runDaemon(ctx, c, cfg, dir, strings.TrimSuffix(stateFile, ".json")+".daemon.json")
+}
+
+// setup reads the config and returns its path, the config and the client for
+// server, else the configured one.
+func setup(server string) (string, config, *client, error) {
+	path, err := configPath()
+	if err != nil {
+		return "", config{}, nil, err
+	}
+	cfg, err := loadConfig(path)
+	if err != nil {
+		return "", config{}, nil, err
+	}
+	server = cmp.Or(server, os.Getenv("NOTELY_SERVER"), cfg.Server.URL, "http://localhost:8000")
+	c, err := newClient(server)
+	if err != nil {
+		return "", config{}, nil, err
+	}
+	return path, forServer(cfg, c.base), c, nil
 }
 
 // forServer drops the password command unless base is the configured

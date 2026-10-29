@@ -21,6 +21,7 @@ import (
 
 	"github.com/jmnser/notely/internal/atomicfile"
 	"github.com/jmnser/notely/internal/note"
+	"github.com/jmnser/notely/internal/notefile"
 )
 
 // Images are files in the space directories, next to the notes, named by a
@@ -28,9 +29,7 @@ import (
 // Notes reference them as drawings: by name in their own space, else by
 // space path, so the Markdown also works in the git backup.
 const (
-	maxImage      = 2 << 20
-	maxLabel      = 63
-	fallbackLabel = "image" // when nothing of a file name is left
+	maxImage = 2 << 20
 )
 
 // imageTypes maps the image types accepted for upload to their file
@@ -51,29 +50,6 @@ var (
 	errBadLabel   = errors.New("use up to 63 lower case letters, digits and -, starting and ending with a letter or digit")
 	errImageTaken = errors.New("an image of that name is in that space")
 )
-
-// label turns a file name without its extension into a DNS label.
-func label(file string) string {
-	file = strings.TrimSuffix(file, path.Ext(file))
-	var b strings.Builder
-	dash := false
-	for _, r := range strings.ToLower(file) {
-		if (r < 'a' || r > 'z') && (r < '0' || r > '9') {
-			dash = b.Len() > 0
-			continue
-		}
-		if dash {
-			b.WriteByte('-')
-			dash = false
-		}
-		b.WriteRune(r)
-	}
-	s := strings.TrimRight(b.String()[:min(b.Len(), maxLabel)], "-")
-	if s == "" {
-		return fallbackLabel
-	}
-	return s
-}
 
 // version identifies the content of an image file; renames keep it.
 func version(info fs.FileInfo) string {
@@ -106,7 +82,7 @@ func (s *store) dirOf(space string) string {
 	if rel == "" {
 		return "."
 	}
-	return s.spaceDir(fileName(rel, "unnamed"))
+	return s.spaceDir(notefile.Name(rel, "unnamed"))
 }
 
 // spaceFile holds, in a space directory with images, the space's path below
@@ -265,11 +241,11 @@ func (s *store) addImage(dir, space, file string, data []byte) (string, error) {
 			return name, nil
 		}
 	}
-	base := label(file)
+	base := note.ImageLabel(file)
 	stem := base
 	for i := 2; stemTaken(names, stem, ""); i++ {
 		suffix := "-" + strconv.Itoa(i)
-		stem = strings.TrimRight(base[:min(len(base), maxLabel-len(suffix))], "-") + suffix
+		stem = strings.TrimRight(base[:min(len(base), note.MaxLabel-len(suffix))], "-") + suffix
 	}
 	root, err := os.OpenRoot(s.dir)
 	if err != nil {

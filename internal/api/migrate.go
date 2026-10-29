@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"github.com/jmnser/notely/internal/atomicfile"
+	"github.com/jmnser/notely/internal/notefile"
 )
 
 // Former shared layout: notes and spaces directly in the data directory,
@@ -57,7 +58,7 @@ func migrate(dir string, users map[string]argonHash) error {
 		case name == oldUsersSpace:
 			notes = append(notes, name)
 		case name == usersDir || strings.HasPrefix(name, "."):
-		case e.IsDir() || e.Type().IsRegular() && noteFile(name):
+		case e.IsDir() || e.Type().IsRegular() && notefile.IsNote(name):
 			notes = append(notes, name)
 		}
 	}
@@ -146,7 +147,7 @@ func copyTree(from, to string) error {
 			return nil
 		case d.IsDir():
 			return os.MkdirAll(out, 0o700)
-		case !d.Type().IsRegular() || !noteFile(p) && !hashName.MatchString(d.Name()):
+		case !d.Type().IsRegular() || !notefile.IsNote(p) && !hashName.MatchString(d.Name()):
 			return nil
 		}
 		return copyMissing(p, out)
@@ -172,14 +173,14 @@ func migrateImages(from, home string) error {
 				return filepath.SkipDir
 			}
 			return nil
-		case d.IsDir() || filepath.Ext(p) != noteExt:
+		case d.IsDir() || filepath.Ext(p) != notefile.MarkdownExt:
 			return nil
 		}
 		data, err := os.ReadFile(p) //nolint:gosec // under the -data flag
 		if err != nil {
 			return err
 		}
-		n, err := decode(data, noteExt)
+		n, err := notefile.Decode(data, notefile.MarkdownExt)
 		if err != nil || !oldImageRef.MatchString(n.Body) {
 			return nil //nolint:nilerr // not a note: left as it is
 		}
@@ -189,7 +190,7 @@ func migrateImages(from, home string) error {
 			}
 		}
 		n.Body = oldImageRef.ReplaceAllString(n.Body, "$1$2")
-		return atomicfile.WriteFile(p, encodeMarkdown(n))
+		return atomicfile.WriteFile(p, notefile.EncodeMarkdown(n))
 	})
 	if err != nil {
 		return err

@@ -26,6 +26,9 @@ type config struct {
 		// keychain or a password manager instead of this file.
 		PasswordCommand string `toml:"password_command"`
 	} `toml:"server"`
+	Daemon struct {
+		Dir string `toml:"dir"` // synced by -daemon; ~/ is the home directory
+	} `toml:"daemon"`
 }
 
 const windows = "windows" // runtime.GOOS

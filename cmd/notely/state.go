@@ -70,38 +70,51 @@ func moveState(dir string) {
 // loadState reads the state at path; a missing file is an empty state.
 func loadState(path string) (*state, error) {
 	s := &state{path: path}
-	data, err := os.ReadFile(path) //nolint:gosec // path is derived from the config directory
-	if errors.Is(err, fs.ErrNotExist) {
-		return s, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	return s, json.Unmarshal(data, s)
+	return s, loadJSON(path, s)
 }
 
 // save writes the state atomically and durably.
-func (s *state) save() error {
-	data, err := json.Marshal(s)
+func (s *state) save() error { return saveJSON(s.path, s) }
+
+// lock makes sure only one client uses the state, since each save replaces
+// the whole file.
+func (s *state) lock() (unlock func(), err error) { return lockPath(s.path, "this server") }
+
+// loadJSON decodes the JSON file at path into v; a missing file leaves v.
+func loadJSON(path string, v any) error {
+	data, err := os.ReadFile(path) //nolint:gosec // path is derived from the config directory
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(s.path), 0o700); err != nil {
-		return err
-	}
-	return atomicfile.WriteFile(s.path, data)
+	return json.Unmarshal(data, v)
 }
 
-// lock makes sure only one client uses the state, since each save replaces
-// the whole file. It holds an OS file lock on <state>.lock, which the OS
-// releases when the process ends, even on a crash; the file holds the
-// process ID for the error message. unlock releases it.
-func (s *state) lock() (unlock func(), err error) {
-	if err := os.MkdirAll(filepath.Dir(s.path), 0o700); err != nil {
+// saveJSON writes v as JSON to path atomically and durably, readable only by
+// the user.
+func saveJSON(path string, v any) error {
+	data, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return err
+	}
+	return atomicfile.WriteFile(path, data)
+}
+
+// lockPath makes sure only one process uses path, a file or directory of
+// what. It holds an OS file lock on <path>.lock, which the OS releases when
+// the process ends, even on a crash; the file holds the process ID for the
+// error message. unlock releases it.
+func lockPath(path, what string) (unlock func(), err error) {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return nil, err
 	}
-	name := s.path + ".lock"
-	f, err := os.OpenFile(name, os.O_CREATE|os.O_RDWR, 0o600) //nolint:gosec // next to the state
+	name := path + ".lock"
+	f, err := os.OpenFile(name, os.O_CREATE|os.O_RDWR, 0o600) //nolint:gosec // next to path
 	if err != nil {
 		return nil, err
 	}
@@ -109,9 +122,9 @@ func (s *state) lock() (unlock func(), err error) {
 		pid, _ := io.ReadAll(io.LimitReader(f, 20))
 		f.Close() //nolint:errcheck,gosec // read only
 		if p := strings.TrimSpace(string(pid)); p != "" {
-			return nil, fmt.Errorf("notely (process %s) already uses this server", p)
+			return nil, fmt.Errorf("notely (process %s) already uses %s", p, what)
 		}
-		return nil, errors.New("another notely already uses this server")
+		return nil, fmt.Errorf("another notely already uses %s", what)
 	}
 	if err := f.Truncate(0); err == nil {
 		fmt.Fprint(f, os.Getpid()) //nolint:errcheck // only for the message

@@ -23,8 +23,11 @@ const (
 	cookieName = "notely_session"
 )
 
-// errSignedOut is returned when the backend needs a sign-on.
-var errSignedOut = errors.New("signed out")
+var (
+	errSignedOut     = errors.New("signed out") // the backend needs a sign-on
+	errWrongPassword = errors.New("wrong user name or password")
+	errNotFound      = errors.New("not found")
+)
 
 // badRequest is the backend's explanation of a rejected request.
 type badRequest string
@@ -35,6 +38,7 @@ func (e badRequest) Error() string { return string(e) }
 type client struct {
 	base string // server URL without a trailing slash, e.g. https://host/notely
 	http *http.Client
+	id   string // sent as X-Notely-Client, so the server does not report this client's own changes
 }
 
 // newClient checks server, the URL notely is served under. Plain HTTP is only
@@ -65,7 +69,7 @@ func loopback(host string) bool {
 func (c *client) login(ctx context.Context, user, password string) (string, error) {
 	res, err := c.send(ctx, http.MethodPost, "/api/login", "", map[string]string{"user": user, "password": password})
 	if errors.Is(err, errSignedOut) {
-		return "", errors.New("wrong user name or password")
+		return "", errWrongPassword
 	} else if err != nil {
 		return "", err
 	}
@@ -125,28 +129,53 @@ func (c *client) call(ctx context.Context, method, path, token string, in, out a
 	return nil
 }
 
-// send makes a request and returns the response if it succeeded; the caller
-// closes its body.
+// send makes a request with in as JSON, if not nil, and returns the response
+// if it succeeded; the caller closes its body.
 func (c *client) send(ctx context.Context, method, path, token string, in any) (*http.Response, error) {
-	var body io.Reader
-	if in != nil {
-		b, err := json.Marshal(in)
-		if err != nil {
-			return nil, err
-		}
-		body = bytes.NewReader(b)
+	if in == nil {
+		return c.sendBody(ctx, method, path, token, nil, "")
 	}
+	b, err := json.Marshal(in)
+	if err != nil {
+		return nil, err
+	}
+	return c.sendBody(ctx, method, path, token, bytes.NewReader(b), "application/json")
+}
+
+// sendBody makes a request with body of type contentType and returns the
+// response if it succeeded; the caller closes its body.
+func (c *client) sendBody(ctx context.Context, method, path, token string, body io.Reader, contentType string) (
+	*http.Response, error,
+) {
+	req, err := c.request(ctx, method, path, token, body)
+	if err != nil {
+		return nil, err
+	}
+	if contentType != "" {
+		req.Header.Set("Content-Type", contentType)
+	}
+	return c.do(c.http, req)
+}
+
+// request makes a request to the API, signed on with token if not empty.
+func (c *client) request(ctx context.Context, method, path, token string, body io.Reader) (*http.Request, error) {
 	req, err := http.NewRequestWithContext(ctx, method, c.base+path, body) //nolint:gosec // the user's -server
 	if err != nil {
 		return nil, err
 	}
-	if in != nil {
-		req.Header.Set("Content-Type", "application/json")
+	if c.id != "" {
+		req.Header.Set("X-Notely-Client", c.id)
 	}
 	if token != "" {
 		req.AddCookie(&http.Cookie{Name: cookieName, Value: token}) //nolint:gosec // a request cookie has no attributes
 	}
-	res, err := c.http.Do(req) //nolint:gosec // as above
+	return req, nil
+}
+
+// do sends req with hc and returns the response if it succeeded; the caller
+// closes its body.
+func (c *client) do(hc *http.Client, req *http.Request) (*http.Response, error) {
+	res, err := hc.Do(req) //nolint:gosec // the user's -server
 	if err != nil {
 		return nil, err
 	}
@@ -160,8 +189,10 @@ func (c *client) send(ctx context.Context, method, path, token string, in any) (
 		return nil, errSignedOut
 	case http.StatusBadRequest:
 		return nil, badRequest(strings.TrimSpace(string(text)))
+	case http.StatusNotFound:
+		return nil, fmt.Errorf("%s %s: %w", req.Method, req.URL.Path, errNotFound)
 	case http.StatusTooManyRequests, http.StatusServiceUnavailable: // sign-in throttled
 		return nil, errors.New(strings.TrimSpace(string(text)))
 	}
-	return nil, fmt.Errorf("%s %s: %s", method, path, res.Status)
+	return nil, fmt.Errorf("%s %s: %s", req.Method, req.URL.Path, res.Status)
 }
