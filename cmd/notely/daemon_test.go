@@ -1,4 +1,4 @@
-//go:build !wasm
+//go:build linux || darwin
 
 package main
 
@@ -9,6 +9,7 @@ import (
 	"image/png"
 	"io"
 	"log"
+	"maps"
 	"os"
 	"path/filepath"
 	"strings"
@@ -114,7 +115,7 @@ func TestDaemonPull(t *testing.T) {
 	d, other, token := mirrored(t)
 	ctx := t.Context()
 	n := note.Note{ID: "a", Space: "Work/Projects", Title: "Plan", Body: "# Plan"}
-	if _, _, err := other.exchange(ctx, token, []note.Note{n}, nil); err != nil {
+	if _, _, err := other.exchange(ctx, token, []note.Note{n, {ID: "b", Title: "Keep"}}, nil); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := other.addImage(ctx, token, "Work", "pic.png", pngData(t, 1)); err != nil {
@@ -213,6 +214,10 @@ func TestDaemonPush(t *testing.T) {
 		t.Fatal(err)
 	}
 	syncOK(t, d)
+	if len(remoteNotes(t, other, token)) != 4 {
+		t.Fatal("deleted on the first scan missing the file")
+	}
+	syncOK(t, d)
 	if notes = remoteNotes(t, other, token); len(notes) != 3 {
 		t.Fatalf("deletion not pushed: %+v", notes)
 	}
@@ -288,6 +293,7 @@ func TestDaemonImages(t *testing.T) {
 		t.Fatal(err)
 	}
 	syncOK(t, d)
+	syncOK(t, d)
 	if images, _ = other.images(ctx, token); len(images) != 0 {
 		t.Fatalf("deletion not pushed: %+v", images)
 	}
@@ -332,18 +338,61 @@ func TestDaemonKeepsNotesWhenFilesAreGone(t *testing.T) {
 	if err := os.Remove(filepath.Join(d.st.Dir, "Plan.md")); err != nil {
 		t.Fatal(err)
 	}
-	if err := d.sync(t.Context()); err == nil {
-		t.Fatal("sync of an emptied directory succeeded")
+	syncOK(t, d)
+	syncOK(t, d)
+	if len(remoteNotes(t, other, token)) != 1 || !exists(d, "Plan.md") {
+		t.Fatal("emptied directory not restored from the server")
 	}
+
+	if _, _, err := other.exchange(t.Context(), token, nil, []string{remoteNotes(t, other, token)["Plan"].ID}); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.sync(t.Context()); err == nil || !exists(d, "Plan.md") {
+		t.Fatalf("emptied server removed the files: %v", err)
+	}
+
 	if err := os.Remove(filepath.Join(d.st.Dir, ".notely.lock")); err != nil {
 		t.Fatal(err)
 	}
-	writeFile(t, d, "Other.md", "x")
 	if err := d.sync(t.Context()); err == nil {
 		t.Fatal("sync of a recreated directory succeeded")
 	}
-	if len(remoteNotes(t, other, token)) != 1 {
-		t.Fatal("notes deleted")
+}
+
+func TestDaemonPulledBeforeCrash(t *testing.T) {
+	d, other, token := mirrored(t)
+	n := note.Note{ID: "a", Title: "Plan", Body: "v1"}
+	if _, _, err := other.exchange(t.Context(), token, []note.Note{n}, nil); err != nil {
+		t.Fatal(err)
+	}
+	syncOK(t, d)
+	saved := maps.Clone(d.st.Files)
+	n.Body = "v2"
+	if _, _, err := other.exchange(t.Context(), token, []note.Note{n}, nil); err != nil {
+		t.Fatal(err)
+	}
+	syncOK(t, d)
+	d.st.Files = saved // the state save was lost
+	n.Body = "v3"
+	if _, _, err := other.exchange(t.Context(), token, []note.Note{n}, nil); err != nil {
+		t.Fatal(err)
+	}
+	syncOK(t, d)
+	if got := remoteNotes(t, other, token)["Plan"]; got.Body != "v3" || !strings.HasSuffix(readFile(t, d, "Plan.md"), "v3") {
+		t.Fatalf("server has %q, want v3 kept and pulled", got.Body)
+	}
+}
+
+func TestDaemonRefusesForeignDir(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "README.md"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := ownDir(dir); err == nil {
+		t.Fatal("a directory never synced was taken")
+	}
+	if err := ownDir(t.TempDir()); err != nil {
+		t.Fatal(err)
 	}
 }
 

@@ -1,4 +1,4 @@
-//go:build !wasm
+//go:build linux || darwin
 
 package main
 
@@ -28,8 +28,13 @@ import (
 	"github.com/jmnser/notely/internal/notefile"
 )
 
-// settle is how long file changes pause before the daemon syncs them.
-const settle = 500 * time.Millisecond
+const (
+	// settle is how long file changes pause before the daemon syncs them.
+	settle = 500 * time.Millisecond
+	// racy is how long after a file's modification time its size and time
+	// may stay the same through another change, on coarse file systems.
+	racy = 2 * time.Second
+)
 
 // mirrorState is what the daemon keeps per server: the session and each file
 // as last synced, which tells local changes from remote ones.
@@ -51,7 +56,9 @@ type entry struct {
 	Sum     string    `json:"sum"` // SHA-256 of the content
 	Size    int64     `json:"size"`
 	ModTime time.Time `json:"mtime"`
-	Version string    `json:"version"` // the note's updated time or the image's version on the server
+	Checked time.Time `json:"checked"`           // when the sum was taken
+	Version string    `json:"version"`           // the note's updated time or the image's version on the server
+	Updated string    `json:"updated,omitempty"` // the note's updated time in the file
 }
 
 // file is a note or image file found by a scan.
@@ -64,7 +71,8 @@ type file struct {
 	large bool       // too large to sync
 	note  *note.Note // a changed note file, decoded
 	moved string     // the note's former path
-	known bool       // a note with an ID of a file not synced here, e.g. left by a crash
+	known bool       // a note to compare with the server's first, e.g. left by a crash
+	base  string     // with known: the server's version last synced, if any
 }
 
 // daemon mirrors a user's notes and images to a directory: it pushes the
@@ -77,6 +85,10 @@ type daemon struct {
 	stateFile string
 	files     map[string]*file // found by the last scan
 	dirs      map[string]bool  // found by the last scan
+	// missing holds the synced files the last scan did not find: a file is
+	// only deleted when two scans miss it, as saves may move it away briefly.
+	missing, prevMissing map[string]bool
+	again                bool // the next sync is due once changes settle
 	// rejected holds files the server or the daemon refused, by path, with
 	// their sum: they are left alone until they change.
 	rejected map[string]string
@@ -107,6 +119,9 @@ func runDaemon(ctx context.Context, c *client, cfg config, dir, stateFile string
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
 	}
+	if err := ownDir(dir); err != nil {
+		return err
+	}
 	unlockDir, err := lockPath(filepath.Join(dir, ".notely"), "this directory")
 	if err != nil {
 		return err
@@ -115,6 +130,9 @@ func runDaemon(ctx context.Context, c *client, cfg config, dir, stateFile string
 	if st.Dir != dir || st.User != cfg.Server.User {
 		if len(st.Files) > 0 && st.User != cfg.Server.User {
 			return fmt.Errorf("%s holds the notes of %s; sync another directory", st.Dir, st.User)
+		}
+		if st.User != cfg.Server.User {
+			st.Session = ""
 		}
 		st.Dir, st.User, st.Files = dir, cfg.Server.User, nil
 	}
@@ -130,6 +148,22 @@ func runDaemon(ctx context.Context, c *client, cfg config, dir, stateFile string
 	d := &daemon{c: c, cfg: cfg, st: st, root: root, stateFile: stateFile, rejected: map[string]string{}}
 	log.Printf("syncing %s with %s", dir, c.base)
 	return d.run(ctx)
+}
+
+// ownDir refuses a directory with files that the daemon never synced: it
+// would add front matter to every Markdown file, upload it and rename images.
+func ownDir(dir string) error {
+	if _, err := os.Lstat(filepath.Join(dir, ".notely.lock")); !errors.Is(err, fs.ErrNotExist) {
+		return nil //nolint:nilerr // synced before, or the lock reports the error
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return err
+	}
+	if slices.ContainsFunc(entries, func(e os.DirEntry) bool { return !strings.HasPrefix(e.Name(), ".") }) {
+		return fmt.Errorf("%s has files but was never synced; use a new or empty directory", dir)
+	}
+	return nil
 }
 
 // run syncs on start, when files change, when the server reports a change
@@ -171,6 +205,9 @@ func (d *daemon) run(ctx context.Context) error {
 				d.save()
 			} else if err != nil && ctx.Err() == nil {
 				log.Printf("sync: %v", err)
+			}
+			if d.again {
+				pause.Reset(settle)
 			}
 		}
 		d.watch(w)
@@ -283,11 +320,16 @@ func (d *daemon) sync(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	d.pullNotes(remote)
 	images, err := d.c.images(ctx, d.st.Session)
 	if err != nil {
 		return err
 	}
+	if len(remote) == 0 && len(images) == 0 && len(d.st.Files) > 0 {
+		// E.g. a server restored without its data: the files may be the last copy.
+		return fmt.Errorf("the server has no notes, so the files are kept; delete them, "+
+			"or stop the daemon and remove %s to upload them again", d.stateFile)
+	}
+	d.pullNotes(remote)
 	return d.pullImages(ctx, images)
 }
 
@@ -304,10 +346,27 @@ func (d *daemon) scan() error {
 		return err
 	}
 	if len(d.files) == 0 && len(d.st.Files) > 0 {
-		return fmt.Errorf("all files in %s are gone; restore them, or stop the daemon and remove %s to sync anew",
-			d.st.Dir, d.stateFile)
+		log.Printf("all files in %s are gone; downloading them again", d.st.Dir)
+		d.st.Files = map[string]entry{}
 	}
+	missing := map[string]bool{}
+	for p := range d.st.Files {
+		if _, ok := d.files[p]; !ok {
+			missing[p] = true
+		}
+	}
+	d.prevMissing, d.missing, d.again = d.missing, missing, false
 	return nil
+}
+
+// deletable reports whether the synced file at p is gone for good: missed by
+// two scans. Else the next sync is due once changes settle.
+func (d *daemon) deletable(p string) bool {
+	if d.prevMissing[p] {
+		return true
+	}
+	d.again = true
+	return false
 }
 
 // walk adds the note and image files to d.files and the directories to d.dirs.
@@ -333,7 +392,7 @@ func (d *daemon) walk() error {
 		}
 		f := &file{size: info.Size(), mod: info.ModTime()}
 		e, known := d.st.Files[p]
-		if known && e.Size == f.size && e.ModTime.Equal(f.mod) {
+		if known && e.Size == f.size && e.ModTime.Equal(f.mod) && f.mod.Before(e.Checked.Add(-racy)) {
 			f.sum, f.clean = e.Sum, true
 			d.files[p] = f
 			return nil
@@ -349,7 +408,7 @@ func (d *daemon) walk() error {
 		}
 		f.sum = sum(f.data)
 		if f.clean = known && e.Sum == f.sum; f.clean {
-			e.Size, e.ModTime = f.size, f.mod
+			e.Size, e.ModTime, e.Checked = f.size, f.mod, time.Now()
 			d.st.Files[p] = e
 		}
 		d.files[p] = f
@@ -383,7 +442,7 @@ func (d *daemon) pushNotes(ctx context.Context) ([]note.Note, error) {
 	var deleted []string
 	gone := map[string]string{} // ID → path
 	for p, e := range d.st.Files {
-		if e.ID != "" && !present[e.ID] {
+		if _, ok := d.files[p]; e.ID != "" && !present[e.ID] && (ok || d.deletable(p)) {
 			deleted = append(deleted, e.ID)
 			gone[e.ID] = p
 		}
@@ -412,9 +471,9 @@ func (d *daemon) pushNotes(ctx context.Context) ([]note.Note, error) {
 	return remote, nil
 }
 
-// compare checks the notes of files not synced here against the server's:
-// a file that only differs in the updated time is taken as synced, an older
-// one is replaced by the server's version.
+// compare checks the known notes against the server's: a file that only
+// differs in the updated time is taken as synced; an older one, or a move
+// while the note changed there, is replaced by the server's version.
 func (d *daemon) compare(ctx context.Context) error {
 	var known []string
 	for _, p := range sortedKeys(d.files) {
@@ -439,11 +498,18 @@ func (d *daemon) compare(ctx context.Context) error {
 		switch {
 		case !ok:
 		case same(*f.note, r):
-			d.track(p, r, f.size, f.mod, f.sum)
+			d.track(p, r, f.note.Updated, f.size, f.mod, f.sum)
 			f.note, f.clean = nil, true
-		case r.Updated.After(f.note.Updated):
+		case f.base != "" && noteVersion(r) == f.base: // unchanged there: push the move
+			continue
+		case f.base != "" || r.Updated.After(f.note.Updated):
 			d.st.Files[p] = entry{ID: r.ID, Space: r.Space} // pulled
 			f.note, f.clean = nil, true
+		default:
+			continue
+		}
+		if f.moved != "" {
+			delete(d.st.Files, f.moved)
 		}
 	}
 	return nil
@@ -499,11 +565,19 @@ func (d *daemon) localNotes() map[string]bool {
 			c.n.ID = randID()
 		case wasSynced && old != c.p:
 			if _, still := d.files[old]; !still {
+				// Unchanged content may be a move the daemon pulled before a crash.
+				if e := d.st.Files[old]; c.f.sum == e.Sum {
+					c.f.known, c.f.base = true, e.Version
+				}
 				n := movedTo(c.n, old, c.p, d.spaceOf(path.Dir(c.p)))
 				c.n, c.f.moved, c.stale = n, old, n != c.n // the front matter follows
 			}
 		case !wasSynced:
 			c.f.known = true
+		default:
+			// Newer than synced: pulled before a crash, not edited.
+			base, err := time.Parse(time.RFC3339Nano, d.st.Files[c.p].Version)
+			c.f.known = err == nil && c.n.Updated.After(base)
 		}
 		owner[c.n.ID], present[c.n.ID] = c.p, true
 		if c.stale && !d.rewrite(c.p, c.f, c.n) {
@@ -520,14 +594,15 @@ func (d *daemon) decodeNote(p string, f *file, e entry) (n note.Note, stale, ok 
 	if f.large { // rejected by the scan
 		return n, false, false
 	}
-	n, err := notefile.Decode(f.data, path.Ext(p))
+	data := bytes.TrimPrefix(f.data, []byte("\xef\xbb\xbf")) // a byte order mark some editors add
+	n, err := notefile.Decode(data, path.Ext(p))
 	switch {
 	case err == nil:
 		return n, false, true
 	case e.ID != "" && len(bytes.TrimSpace(f.data)) == 0: // maybe half written
 		err = errors.New("empty; delete the file to delete the note")
-	case untracked(f.data, path.Ext(p)):
-		n = d.newNote(p, f.data)
+	case untracked(data, path.Ext(p)):
+		n = d.newNote(p, data)
 		if e.ID != "" { // lost its fields, e.g. saved by Excalidraw: still the same note
 			n.ID, n.Space, n.Title, n.Pinned = e.ID, e.Space, cmp.Or(e.Title, n.Title), e.Pinned
 		}
@@ -646,7 +721,7 @@ func (d *daemon) pullNotes(remote []note.Note) {
 			}
 		case !ok: // pushed, but deleted meanwhile; the next sync restores it
 		case pushed && same(*f.note, r):
-			d.track(p, r, f.size, f.mod, f.sum)
+			d.track(p, r, f.note.Updated, f.size, f.mod, f.sum)
 			d.place(p, f, r)
 		case f.clean && d.st.Files[p].Version == noteVersion(r):
 			d.place(p, f, r)
@@ -654,8 +729,12 @@ func (d *daemon) pullNotes(remote []note.Note) {
 			d.pull(p, f, r)
 		}
 	}
+	pending := map[string]bool{} // IDs of files missing, not yet deleted
+	for p := range d.missing {
+		pending[d.st.Files[p].ID] = true
+	}
 	for id, r := range byID {
-		if _, ok := local[id]; !ok {
+		if _, ok := local[id]; !ok && !pending[id] {
 			d.pull("", nil, r)
 		}
 	}
@@ -675,13 +754,20 @@ func (d *daemon) pull(p string, f *file, r note.Note) {
 		return
 	}
 	to := d.pathFor(r, p)
-	moved := p != "" && p != to
-	inPlace := moved && d.sameFile(p, to) // a case-only rename on a case-insensitive file system
 	data, err := notefile.Encode(r)
-	if err == nil {
-		err = d.write(to, data)
-	}
 	if err != nil {
+		log.Printf("%s: %v", to, err)
+		return
+	}
+	// A move renames first: a crash then leaves one file of the note, which
+	// the next sync compares with the server.
+	if p != "" && p != to {
+		if err := d.rename(p, to); err != nil {
+			log.Printf("%s: %v", to, err)
+			return
+		}
+	}
+	if err := d.write(to, data); err != nil {
 		log.Printf("%s: %v", to, err)
 		return
 	}
@@ -690,21 +776,16 @@ func (d *daemon) pull(p string, f *file, r note.Note) {
 		log.Printf("%s: %v", to, err)
 		return
 	}
-	switch {
-	case inPlace:
-		delete(d.st.Files, p)
-	case moved:
-		d.remove(p)
-	}
-	d.track(to, r, info.Size(), info.ModTime(), sum(data))
+	d.track(to, r, r.Updated, info.Size(), info.ModTime(), sum(data))
 	log.Printf("pulled %s", to)
 }
 
-// track records the file at p as synced with note r.
-func (d *daemon) track(p string, r note.Note, size int64, mod time.Time, sum string) {
+// track records the file at p, whose note has updated time local, as
+// synced with note r.
+func (d *daemon) track(p string, r note.Note, local time.Time, size int64, mod time.Time, sum string) {
 	d.st.Files[p] = entry{
-		ID: r.ID, Space: r.Space, Title: r.Title, Pinned: r.Pinned,
-		Sum: sum, Size: size, ModTime: mod, Version: noteVersion(r),
+		ID: r.ID, Space: r.Space, Title: r.Title, Pinned: r.Pinned, Sum: sum, Size: size, ModTime: mod,
+		Checked: time.Now(), Version: noteVersion(r), Updated: noteVersion(note.Note{Updated: local}),
 	}
 }
 
@@ -740,13 +821,13 @@ func spaceDir(space string) string {
 }
 
 // pushImages uploads new and changed image files and deletes or moves the
-// images whose files are gone. An image whose content is still in a file is
-// not deleted, so a move the server refused does not lose it.
+// images whose files are gone. An image whose content is in a file not
+// synced yet is not deleted, so a move the server refused does not lose it.
 func (d *daemon) pushImages(ctx context.Context) error {
-	onDisk := map[string]bool{} // sums
+	unsynced := map[string]bool{} // sums of image files not synced yet
 	for p, f := range d.files {
-		if isImage(p) {
-			onDisk[f.sum] = true
+		if isImage(p) && !f.clean {
+			unsynced[f.sum] = true
 		}
 	}
 	gone := map[string]string{} // path → sum of images whose files are gone
@@ -780,12 +861,14 @@ func (d *daemon) pushImages(ctx context.Context) error {
 			delete(d.files, p)
 			d.files[to] = f
 		}
-		d.st.Files[to] = entry{Space: img.Space, Sum: f.sum, Size: f.size, ModTime: f.mod, Version: img.Version}
+		d.st.Files[to] = entry{
+			Space: img.Space, Sum: f.sum, Size: f.size, ModTime: f.mod, Checked: time.Now(), Version: img.Version,
+		}
 		f.clean = true
 		log.Printf("pushed %s", to)
 	}
 	for _, p := range sortedKeys(gone) {
-		if onDisk[gone[p]] {
+		if unsynced[gone[p]] || !d.deletable(p) {
 			continue
 		}
 		if err := d.c.deleteImage(ctx, d.st.Session, d.imageOf(p)); err != nil && !errors.Is(err, errNotFound) {
@@ -888,7 +971,8 @@ func (d *daemon) pullImages(ctx context.Context, images []note.Image) error {
 			return err
 		}
 		d.st.Files[p] = entry{
-			Space: img.Space, Sum: sum(data), Size: info.Size(), ModTime: info.ModTime(), Version: img.Version,
+			Space: img.Space, Sum: sum(data), Size: info.Size(), ModTime: info.ModTime(), Checked: time.Now(),
+			Version: img.Version,
 		}
 		log.Printf("pulled %s", p)
 	}
@@ -929,6 +1013,19 @@ func (d *daemon) write(p string, data []byte) error {
 	return atomicfile.WriteFileIn(d.root, p, data)
 }
 
+// rename moves the file at p to the free path to, and forgets p.
+func (d *daemon) rename(p, to string) error {
+	if err := d.root.MkdirAll(path.Dir(to), 0o700); err != nil {
+		return err
+	}
+	if err := d.root.Rename(p, to); err != nil {
+		return err
+	}
+	delete(d.st.Files, p)
+	d.removeDirs(path.Dir(p))
+	return nil
+}
+
 // remove deletes the file at p and its directories once empty.
 func (d *daemon) remove(p string) {
 	if err := d.root.Remove(p); err != nil && !errors.Is(err, fs.ErrNotExist) {
@@ -936,7 +1033,12 @@ func (d *daemon) remove(p string) {
 		return
 	}
 	delete(d.st.Files, p)
-	for dir := path.Dir(p); dir != "."; dir = path.Dir(dir) {
+	d.removeDirs(path.Dir(p))
+}
+
+// removeDirs removes dir and its parents while empty.
+func (d *daemon) removeDirs(dir string) {
+	for ; dir != "."; dir = path.Dir(dir) {
 		if d.root.Remove(dir) != nil { // not empty
 			return
 		}
