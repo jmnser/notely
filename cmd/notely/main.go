@@ -10,8 +10,10 @@ import (
 	"cmp"
 	"context"
 	"crypto/rand"
+	"errors"
 	"flag"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -101,7 +103,7 @@ func runSync(server, dir string) error {
 	if err != nil {
 		return err
 	}
-	if dir = cmp.Or(dir, cfg.Daemon.Dir, "~/Notely"); dir == "~" || strings.HasPrefix(dir, "~/") {
+	if dir = cmp.Or(dir, cfg.Daemon.Dir, defaultDir()); dir == "~" || strings.HasPrefix(dir, "~/") {
 		home, err := os.UserHomeDir()
 		if err != nil {
 			return err
@@ -115,6 +117,18 @@ func runSync(server, dir string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	return runDaemon(ctx, c, cfg, dir, strings.TrimSuffix(stateFile, ".json")+".daemon.json")
+}
+
+// defaultDir is ~/notely, or ~/Notely, the former default, when only that exists.
+func defaultDir() string {
+	if home, err := os.UserHomeDir(); err == nil {
+		if _, err := os.Stat(filepath.Join(home, "notely")); errors.Is(err, fs.ErrNotExist) {
+			if fi, err := os.Stat(filepath.Join(home, "Notely")); err == nil && fi.IsDir() {
+				return "~/Notely"
+			}
+		}
+	}
+	return "~/notely"
 }
 
 // setup reads the config and returns its path, the config and the client for

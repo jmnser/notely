@@ -89,7 +89,7 @@ password_command = "secret-tool lookup service notely user joe"
 
 ### Sync daemon
 
-On Linux and macOS, `notely -daemon` keeps the notes, drawings and images in a directory in sync with the server, as plain files: `<space>/<subspace>/<title>.md` with front matter, `.excalidraw` drawings and images next to them. Edit them with any editor; changes are pushed at once, changes made elsewhere are written within a second. The directory is `-dir`, else `daemon.dir` in the config, else `~/Notely`; it needs `server.user` and `server.password_command`.
+On Linux and macOS, `notely -daemon` keeps the notes, drawings and images in a directory in sync with the server, as plain files: `<space>/<subspace>/<title>.md` with front matter, `.excalidraw` drawings and images next to them. Edit them with any editor; changes are pushed at once, changes made elsewhere are written within a second. The directory is `-dir`, else `daemon.dir` in the config, else `~/notely` (`~/Notely` when only that exists, as before); it needs `server.user` and `server.password_command`.
 
 ```toml
 [daemon]
