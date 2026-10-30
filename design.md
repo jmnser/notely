@@ -159,7 +159,7 @@ A [Bubble Tea](https://github.com/charmbracelet/bubbletea) v2 client for the sam
 
 ### Sync daemon
 
-`notely -daemon`, on Linux and macOS only, mirrors the notes and images to a directory (`-dir`, `daemon.dir`, default `~/Notely`), signing in with the password command; a wrong password stops it, as retrying would lock the user out.
+`notely -daemon`, on Linux and macOS only, mirrors the notes and images to a directory (`-dir`, `daemon.dir`, default `~/notely`, or an existing `~/Notely`), signing in with the password command; a wrong password stops it, as retrying would lock the user out.
 
 - Layout: a directory per space and subspace, each part named as on the server (`internal/notefile`, shared with it), with the server's file format: Markdown with front matter, `.excalidraw` drawings, images by name. Paths are derived from title and space, with `-2`, … on collisions; files it does not own are never replaced. All access goes through `os.Root`; dot files and symbolic links are skipped.
 - State lives in `~/.config/notely/<hash of the URL>.daemon.json` (mode 0600), apart from the terminal client's, so both can run: the session and each file as last synced (sum, size, modification time, server version). That base tells local from remote changes, a three-way sync: a file whose size or time changed is read and compared by sum. `<state>.lock` and `<dir>/.notely.lock` allow one daemon per server and per directory.
