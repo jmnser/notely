@@ -147,6 +147,12 @@ func (u *ui) OnMount(ctx app.Context) {
 		u.shortcut(ctx, args[0])
 		return nil
 	}))
+	// No form may submit natively: that reloads the page. OnSubmit handlers
+	// run in Dispatch, which can be too late for preventDefault.
+	app.Window().Get("document").Call("addEventListener", "submit", app.FuncOf(func(_ app.Value, args []app.Value) any {
+		args[0].Call("preventDefault")
+		return nil
+	}))
 	for _, event := range []string{"online", "focus"} {
 		app.Window().Call("addEventListener", event, app.FuncOf(func(app.Value, []app.Value) any {
 			ctx.Dispatch(u.sync)
@@ -632,8 +638,7 @@ func (u *ui) ask(p prompt, value string) {
 	})
 }
 
-func (u *ui) submit(_ app.Context, e app.Event) {
-	e.PreventDefault()
+func (u *ui) submit(app.Context, app.Event) {
 	v := strings.TrimSpace(app.Window().GetElementByID("dialog-input").Get("value").String())
 	app.Window().GetElementByID("dialog").Call("close")
 	run := u.dialog.run
@@ -773,8 +778,7 @@ func backupStatus(info syncInfo) string {
 	return "Last sync " + when + ": no changes."
 }
 
-func (u *ui) saveBackup(ctx app.Context, e app.Event) {
-	e.PreventDefault()
+func (u *ui) saveBackup(ctx app.Context, _ app.Event) {
 	value := func(id string) string { return app.Window().GetElementByID(id).Get("value").String() }
 	in := map[string]string{
 		"remote": value("backup-remote"), "branch": value("backup-branch"), "token": value("backup-token"),
@@ -853,8 +857,7 @@ func (u *ui) removeBackup(app.Context, app.Event) {
 }
 
 // signIn sends the sign-in form and syncs once signed on.
-func (u *ui) signIn(ctx app.Context, e app.Event) {
-	e.PreventDefault()
+func (u *ui) signIn(ctx app.Context, _ app.Event) {
 	if u.signingIn {
 		return
 	}
