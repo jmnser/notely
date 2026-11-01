@@ -133,6 +133,7 @@ func (u *ui) OnMount(ctx app.Context) {
 	if err := ctx.LocalStorage().Get(signedOutKey, &u.signedOut); err != nil {
 		app.Log(err)
 	}
+	u.nativeSignIn(ctx)
 
 	if depth := app.Window().Get("history").Get("state"); depth.Truthy() && depth.Get(backStateKey).Truthy() {
 		// A reload left the entries of the previous run; go back to the app's own.
@@ -412,12 +413,13 @@ func (u *ui) Render() app.UI {
 			}),
 		),
 		app.Div().Class("login").Hidden(!u.signedOut).Body(
-			app.Form().Class("login-card").OnSubmit(u.signIn).Body(
+			// Also signs in when submitted natively, see nativeSignIn.
+			app.Form().Class("login-card").Method("post").Action("api/login").OnSubmit(u.signIn).Body(
 				icon("description"),
 				app.H1().Text("Sign in"),
-				app.Input().ID("login-user").Class("field").Placeholder("User name").Aria("label", "User name").
+				app.Input().ID("login-user").Name("user").Class("field").Placeholder("User name").Aria("label", "User name").
 					Attr("autocomplete", "username").Attr("autocapitalize", "none").Required(true),
-				app.Input().ID("login-password").Class("field").Type("password").Placeholder("Password").
+				app.Input().ID("login-password").Name("password").Class("field").Type("password").Placeholder("Password").
 					Aria("label", "Password").Attr("autocomplete", "current-password").Required(true),
 				app.P().Class("login-error").Attr("role", "alert").Text(u.loginErr).Hidden(u.loginErr == ""),
 				app.Button().Type("submit").Class("filled-button").Text("Sign in").Disabled(u.signingIn),
@@ -895,6 +897,40 @@ func (u *ui) signIn(ctx app.Context, _ app.Event) {
 			}
 		})
 	})
+}
+
+// nativeSignIn takes the result of the sign-in form submitted natively,
+// without the app's script: the backend redirects here with it in the query.
+func (u *ui) nativeSignIn(ctx app.Context) {
+	loc, history := app.Window().Get("location"), app.Window().Get("history")
+	query := app.Window().Get("URLSearchParams").New(loc.Get("search"))
+	result, user := query.Call("get", "signin"), query.Call("get", "user")
+	if result.IsNull() {
+		return
+	}
+	history.Call("replaceState", history.Get("state"), "", loc.Get("pathname"))
+	switch result.String() {
+	case "failed":
+		u.loginErr = "Wrong user name or password."
+	case "retry":
+		u.loginErr = "Can't sign in right now. Try again."
+	case "ok":
+		name := ""
+		if !user.IsNull() {
+			name = user.String()
+		}
+		if u.user != "" && u.user != name { // another user's notes
+			if len(u.dirty) > 0 || len(u.deleted) > 0 { // must not go to this user's notes
+				u.signedOut, u.discard = true, name
+				u.loginErr = "Changes of " + u.user + " on this device are not synced yet. Sign in as " + u.user +
+					" to keep them, or again to discard them."
+				return
+			}
+			u.notes, u.deleted = nil, nil
+		}
+		u.user, u.signedOut = name, false
+		ctx.LocalStorage().Del(signedOutKey)
+	}
 }
 
 // signOut ends the session and removes the notes from this device.
