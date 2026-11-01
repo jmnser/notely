@@ -5,6 +5,7 @@ import (
 	"log"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -69,6 +70,56 @@ func TestAuth(t *testing.T) {
 	do("POST", "/api/logout", "", c.Value)
 	if status, _ := do("GET", "/api/notes", "", c.Value); status != http.StatusUnauthorized {
 		t.Errorf("after logout: status %d", status)
+	}
+}
+
+func TestAuthForm(t *testing.T) {
+	h, err := parseHash(hashPassword("pw"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	notes := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusTeapot) })
+	srv := httptest.NewServer(newAuth(map[string]argonHash{"ann": h}).handler(notes))
+	defer srv.Close()
+	client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+
+	type answer struct {
+		status   int
+		location string
+		cookies  []*http.Cookie
+	}
+	post := func(form url.Values, site string) answer {
+		t.Helper()
+		req, _ := http.NewRequest("POST", srv.URL+"/api/login", strings.NewReader(form.Encode()))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		req.Header.Set("Sec-Fetch-Site", site)
+		res, err := client.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		res.Body.Close()
+		return answer{res.StatusCode, res.Header.Get("Location"), res.Cookies()}
+	}
+	if a := post(url.Values{"user": {"ann"}, "password": {"x"}}, "same-origin"); a.status != http.StatusSeeOther ||
+		a.location != "../?signin=failed" || len(a.cookies) != 0 {
+		t.Errorf("wrong password: %+v", a)
+	}
+	if a := post(url.Values{"user": {"ann"}, "password": {"pw"}}, "cross-site"); a.status != http.StatusForbidden {
+		t.Errorf("cross-site form: status %d", a.status)
+	}
+	a := post(url.Values{"user": {"ann"}, "password": {"pw"}}, "same-origin")
+	if a.status != http.StatusSeeOther || a.location != "../?signin=ok&user=ann" || len(a.cookies) != 1 {
+		t.Fatalf("sign-in: %+v", a)
+	}
+	req, _ := http.NewRequest("GET", srv.URL+"/api/notes", nil)
+	req.AddCookie(&http.Cookie{Name: cookieName, Value: a.cookies[0].Value})
+	got, err := client.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got.Body.Close()
+	if got.StatusCode != http.StatusTeapot {
+		t.Errorf("notes signed on by the form: status %d", got.StatusCode)
 	}
 }
 

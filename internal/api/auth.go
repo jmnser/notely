@@ -9,7 +9,9 @@ import (
 	"fmt"
 	"io/fs"
 	"log"
+	"mime"
 	"net/http"
+	"net/url"
 	"os"
 	"slices"
 	"strconv"
@@ -28,6 +30,7 @@ const (
 	dummyHash = "$argon2id$v=19$m=65536,t=3,p=1$YmUyNzQ5MjdjYjExMGNiM2JkYzA5YTQ3YjRiZDM5NGY$" +
 		"WKqtCW5E9T1E1Klb1kKlaC3Qi660yEtZnc67iibmWZw"
 	cookieName   = "notely_session"
+	userField    = "user" // the user name in the sign-in form and its redirect
 	sessionTTL   = 30 * 24 * time.Hour
 	failureDelay = time.Second
 	freeFailures = 5 // per user name before backing off
@@ -252,22 +255,47 @@ func (a *auth) handler(next http.Handler) http.Handler {
 	return http.NewCrossOriginProtection().Handler(mux)
 }
 
+// login signs on with JSON from the app or with the sign-in form submitted
+// natively, which some browsers and password managers do without the app's
+// script. The form is answered with a redirect to the app's root, ../ of
+// .../api/login, with the result in the query: signin=ok&user=<name>,
+// signin=failed (wrong password) or signin=retry.
 func (a *auth) login(w http.ResponseWriter, r *http.Request) {
 	var in struct{ User, Password string }
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&in); err != nil {
+	form := false
+	if mt, _, _ := mime.ParseMediaType(r.Header.Get("Content-Type")); mt == "application/x-www-form-urlencoded" {
+		r.Body = http.MaxBytesReader(w, r.Body, 4096)
+		if err := r.ParseForm(); err != nil {
+			http.Error(w, "invalid request", http.StatusBadRequest)
+			return
+		}
+		in.User, in.Password, form = r.PostForm.Get(userField), r.PostForm.Get("password"), true
+	} else if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&in); err != nil {
 		http.Error(w, "invalid request", http.StatusBadRequest)
 		return
 	}
+	fail := func(msg string, status int) {
+		if !form {
+			http.Error(w, msg, status)
+			return
+		}
+		result := "retry"
+		if status == http.StatusUnauthorized {
+			result = "failed"
+		}
+		w.Header().Set("Location", "../?signin="+result)
+		w.WriteHeader(http.StatusSeeOther)
+	}
 	if wait := a.backoff(in.User); wait > 0 {
 		w.Header().Set("Retry-After", strconv.Itoa(int(wait.Seconds())+1))
-		http.Error(w, "too many failed sign-ins, try again later", http.StatusTooManyRequests)
+		fail("too many failed sign-ins, try again later", http.StatusTooManyRequests)
 		return
 	}
 	ok, err := a.check(r, in.User, in.Password)
 	switch {
 	case errors.Is(err, errBusy):
 		w.Header().Set("Retry-After", "5")
-		http.Error(w, "busy, try again later", http.StatusServiceUnavailable)
+		fail("busy, try again later", http.StatusServiceUnavailable)
 		return
 	case err != nil: // the client is gone
 		return
@@ -278,7 +306,7 @@ func (a *auth) login(w http.ResponseWriter, r *http.Request) {
 		case <-time.After(failureDelay):
 		case <-r.Context().Done():
 		}
-		http.Error(w, "wrong user name or password", http.StatusUnauthorized)
+		fail("wrong user name or password", http.StatusUnauthorized)
 		return
 	}
 	token := rand.Text()
@@ -292,6 +320,11 @@ func (a *auth) login(w http.ResponseWriter, r *http.Request) {
 	a.sessions[token] = session{user: in.User, expires: now.Add(sessionTTL)}
 	a.mu.Unlock()
 	http.SetCookie(w, a.cookie(r, token, int(sessionTTL.Seconds())))
+	if form {
+		w.Header().Set("Location", "../?"+url.Values{"signin": {"ok"}, userField: {in.User}}.Encode())
+		w.WriteHeader(http.StatusSeeOther)
+		return
+	}
 	writeJSON(w, map[string]string{"user": in.User})
 }
 
