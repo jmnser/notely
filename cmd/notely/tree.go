@@ -36,13 +36,13 @@ func (r row) key() string {
 }
 
 // rows lists the space tree as the web app's sidebar: subspaces first, then
-// notes. Collapsed spaces hide their content, except while searching.
-func rows(spaces []*note.Space, collapsed map[string]bool, searching bool) []list.Item {
+// notes. Spaces are collapsed unless expanded, except while searching.
+func rows(spaces []*note.Space, expanded map[string]bool, searching bool) []list.Item {
 	var items []list.Item
 	var walk func([]*note.Space, int)
 	walk = func(spaces []*note.Space, depth int) {
 		for _, s := range spaces {
-			open := searching || !collapsed[s.Path]
+			open := searching || expanded[s.Path]
 			items = append(items, row{space: s, depth: depth, open: open})
 			if !open {
 				continue

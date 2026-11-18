@@ -106,7 +106,7 @@ type model struct {
 	rendererKey string
 	current     string          // ID of the open note
 	selectKey   string          // row.key of the row selected in the list
-	collapsed   map[string]bool // space paths whose content is hidden
+	expanded    map[string]bool // space paths whose content shows; others are collapsed
 	search      textinput.Model
 	searching   bool // typing into search
 	user        textinput.Model
@@ -126,7 +126,7 @@ func newModel(c *client, s *state, cfg config) *model {
 	if s.Dirty == nil {
 		s.Dirty = map[string]int{}
 	}
-	m := &model{client: c, state: s, cfg: cfg, dark: true, collapsed: map[string]bool{}}
+	m := &model{client: c, state: s, cfg: cfg, dark: true, expanded: map[string]bool{}}
 	for _, seq := range s.Dirty {
 		m.seq = max(m.seq, seq)
 	}
@@ -412,12 +412,20 @@ func (m *model) listKey(msg tea.KeyPressMsg) (tea.Cmd, bool) {
 	return nil, true
 }
 
+// expandTo expands space path s and its parents, so its notes show.
+func (m *model) expandTo(s string) {
+	m.expanded[""] = true
+	for ok := s != ""; ok; s, _, ok = strings.CutLast(s, "/") {
+		m.expanded[s] = true
+	}
+}
+
 // fold collapses or expands the space at path.
 func (m *model) fold(path string, collapse bool) tea.Cmd {
 	if collapse {
-		m.collapsed[path] = true
+		delete(m.expanded, path)
 	} else {
-		delete(m.collapsed, path)
+		m.expanded[path] = true
 	}
 	return m.refresh()
 }
@@ -440,6 +448,7 @@ func (m *model) action(msg tea.KeyPressMsg) (tea.Cmd, bool) {
 				return nil
 			}
 			n := note.Note{ID: randID(), Space: space, Title: title}
+			m.expandTo(space)
 			m.open(n.ID)
 			return tea.Batch(m.change(n), m.edit(n))
 		}), true
@@ -474,6 +483,7 @@ func (m *model) action(msg tea.KeyPressMsg) (tea.Cmd, bool) {
 			if space, title, ok := note.ParsePath(path); ok && n != nil && m.validTitle(title) {
 				c := *n
 				c.Space, c.Title = space, title
+				m.expandTo(space)
 				return m.change(c)
 			}
 			return nil
@@ -720,7 +730,7 @@ func (m *model) refresh() tea.Cmd {
 			shown = append(shown, n)
 		}
 	}
-	cmd := m.list.SetItems(rows(note.Tree(shown, nil, nil), m.collapsed, m.search.Value() != ""))
+	cmd := m.list.SetItems(rows(note.Tree(shown, nil, nil), m.expanded, m.search.Value() != ""))
 	m.reselect(m.selectKey)
 	m.render()
 	return cmd
