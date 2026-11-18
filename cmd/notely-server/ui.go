@@ -1001,6 +1001,9 @@ func (u *ui) show(id, from string) {
 	}
 	if id != u.current {
 		u.editing = false
+		if id != "" {
+			u.expand(n.Space) // the newly opened note shows in the sidebar
+		}
 	}
 	if id != "" {
 		u.image = ""

@@ -287,9 +287,13 @@ func (m *model) key(msg tea.KeyPressMsg) tea.Cmd {
 	case viewScreen:
 		if key.Matches(msg, keys.back) {
 			m.screen = listScreen
+			if n := m.find(m.current); n != nil {
+				m.expandTo(n.Space)
+			}
+			cmd := m.refresh()
 			m.reselect("note:" + m.current)
 			m.current = ""
-			return nil
+			return cmd
 		}
 	}
 	if cmd, ok := m.action(msg); ok {
@@ -719,10 +723,16 @@ func (m *model) synced(msg syncedMsg) tea.Cmd {
 }
 
 // refresh shows the notes matching the search as a space tree, and the open
-// note.
+// note. The selected note's space is expanded, so the note stays visible after
+// a search or a move from another device.
 func (m *model) refresh() tea.Cmd {
 	if r, ok := m.list.SelectedItem().(row); ok {
 		m.selectKey = r.key()
+	}
+	if id, ok := strings.CutPrefix(m.selectKey, "note:"); ok {
+		if n := m.find(id); n != nil {
+			m.expandTo(n.Space)
+		}
 	}
 	var shown []note.Note
 	for _, n := range m.state.Notes {
