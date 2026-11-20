@@ -1,0 +1,11 @@
+apiVersion: v2
+# Not "notely": a chart with the image's name would share its Docker Hub repo and version tags.
+name: notely-chart
+description: Notely, offline-first Markdown notes.
+type: application
+# Release CI sets version and appVersion to the released version. Git keeps 0.0.0.
+version: 0.0.0
+appVersion: 0.0.0
+home: https://github.com/jmnser/notely
+sources:
+  - https://github.com/jmnser/notely

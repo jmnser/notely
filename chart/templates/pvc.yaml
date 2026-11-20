@@ -1,0 +1,17 @@
+# Binds to the volume that the platform pre-binds to this claim: no storage class, no provisioning.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ .Values.persistence.claimName }}
+  labels:
+    {{- include "notely.labels" . | nindent 4 }}
+  annotations:
+    # The notes outlive the release.
+    helm.sh/resource-policy: keep
+    argocd.argoproj.io/sync-options: Delete=false
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: ""
+  resources:
+    requests:
+      storage: {{ .Values.persistence.size }}

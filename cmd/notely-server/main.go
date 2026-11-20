@@ -43,6 +43,9 @@ func main() {
 	interval := flag.Duration("sync-interval", time.Hour, "git backup interval; 0 syncs on request only")
 	base := flag.String("base", "", "path prefix the app is served under, e.g. /notely")
 	hash := flag.Bool("hash", false, "read a password from stdin, print its argon2id hash and exit")
+	tlsCert := flag.String("tls-cert", "",
+		"PEM certificate file; with -tls-key serves HTTPS and reloads both on change")
+	tlsKey := flag.String("tls-key", "", "PEM private key file for -tls-cert")
 	flag.Parse()
 
 	if *hash {
@@ -72,7 +75,8 @@ func main() {
 		close(synced)
 	}()
 
-	err = serve.Run(*addr, routes(*base, srv, &manifestID{id: cmp.Or(*base, "/"), next: &app.Handler{
+	files := serve.TLS{CertFile: *tlsCert, KeyFile: *tlsKey}
+	err = serve.Run(*addr, files, routes(*base, srv, &manifestID{id: cmp.Or(*base, "/"), next: &app.Handler{
 		Name:        "Notely",
 		Title:       "Notely",
 		Description: "Offline-first Markdown notes",
