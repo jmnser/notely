@@ -61,7 +61,7 @@ type ui struct {
 	editing    bool            // the open note shows its Markdown source
 	vimOn      bool            // the editor uses Vim keys, kept on this device
 	vim        vim             // the editor's Vim state
-	collapsed  map[string]bool // space paths whose content is hidden
+	expanded   map[string]bool // space paths whose content shows; others are collapsed
 	drawer     bool            // the sidebar is collapsed to a rail on large screens
 	pinned     map[string]bool // pinned space paths, kept on this device
 	dialog     prompt
@@ -109,7 +109,7 @@ func init() {
 func (u *ui) OnMount(ctx app.Context) {
 	u.ctx, u.mounted = ctx, true
 	u.dirty = map[string]int{}
-	u.collapsed = map[string]bool{}
+	u.expanded = map[string]bool{}
 	var pinned []string
 	for k, v := range map[string]any{drawerKey: &u.drawer, pinnedKey: &pinned, vimModeKey: &u.vimOn} {
 		if err := ctx.LocalStorage().Get(k, v); err != nil {
@@ -447,10 +447,10 @@ func (u *ui) Render() app.UI {
 	)
 }
 
-// renderSpace renders space s and, if open, its subspaces and notes. While
-// searching every space is open.
+// renderSpace renders space s and, if open, its subspaces and notes. Spaces
+// start collapsed; while searching every space is open.
 func (u *ui) renderSpace(s *note.Space, searching bool) app.UI {
-	open := searching || !u.collapsed[s.Path]
+	open := searching || u.expanded[s.Path]
 	shared := u.isShared(s.Path)
 	class := "space"
 	if !open {
@@ -466,7 +466,7 @@ func (u *ui) renderSpace(s *note.Space, searching bool) app.UI {
 				}),
 				app.Span().Class("count").Text(s.Count),
 			).OnClick(func(app.Context, app.Event) {
-				u.collapsed[s.Path] = !u.collapsed[s.Path]
+				u.expanded[s.Path] = !u.expanded[s.Path]
 			}, app.EventScope(s.Path)),
 			iconButton("add", "New note or subspace").OnClick(func(app.Context, app.Event) {
 				u.createNew(s.Path)
@@ -533,9 +533,9 @@ func parentOf(s string) string {
 // expand opens space path s and its parents.
 func (u *ui) expand(s string) {
 	for ; s != ""; s = parentOf(s) {
-		delete(u.collapsed, s)
+		u.expanded[s] = true
 	}
-	delete(u.collapsed, "")
+	u.expanded[""] = true
 }
 
 // pinSpace pins or unpins space path s on this device.
@@ -1001,6 +1001,9 @@ func (u *ui) show(id, from string) {
 	}
 	if id != u.current {
 		u.editing = false
+		if id != "" {
+			u.expand(n.Space) // the newly opened note shows in the sidebar
+		}
 	}
 	if id != "" {
 		u.image = ""

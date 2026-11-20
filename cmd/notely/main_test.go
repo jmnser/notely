@@ -170,6 +170,13 @@ func TestTree(t *testing.T) {
 	} {
 		drain(m, m.change(n))
 	}
+	if got := keysOf(m); !slices.Equal(got, []string{"space:", "space:Work"}) {
+		t.Fatalf("rows by default = %q, want collapsed spaces", got)
+	}
+	for _, k := range []string{"space:", "space:Work", "space:Work/Projects"} {
+		m.reselect(k)
+		press(m, "right")
+	}
 	want := []string{"space:", " note:inbox", "space:Work", " space:Work/Projects", "  note:q4", " note:plan"}
 	if got := keysOf(m); !slices.Equal(got, want) {
 		t.Fatalf("rows = %q, want %q", got, want)
@@ -239,6 +246,8 @@ func TestModel(t *testing.T) {
 
 	drain(m, m.change(note.Note{ID: "a", Space: "Work", Title: "Roadmap"}))
 	drain(m, m.change(note.Note{ID: "b", Title: "Inbox"}))
+	m.expandTo("Work")
+	m.refresh()
 	if len(m.state.Dirty) != 0 || len(m.list.Items()) != 4 { // two notes in two spaces
 		t.Fatalf("after sync: dirty %v, rows %q, status %q", m.state.Dirty, keysOf(m), m.status)
 	}
@@ -477,6 +486,7 @@ func TestSelectionFollowsNote(t *testing.T) {
 	m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 	drain(m, m.change(note.Note{ID: "old", Title: "Old"}))
 	drain(m, m.change(note.Note{ID: "new", Title: "New"}))
+	drain(m, m.fold("", false))
 	m.list.Select(2) // old, below its space and the newer note
 	press(m, "p")
 	if r, _ := m.list.SelectedItem().(row); r.note.ID != "old" || !r.note.Pinned {
@@ -487,6 +497,7 @@ func TestSelectionFollowsNote(t *testing.T) {
 func TestRenameKeepsNewerBody(t *testing.T) {
 	m := signedIn(t)
 	drain(m, m.change(note.Note{ID: "a", Title: "A", Body: "old"}))
+	drain(m, m.fold("", false))
 	m.reselect("note:a")
 	m.key(tea.KeyPressMsg{Code: 'r', Text: "r"})
 	m.find("a").Body = "newer" // synced from elsewhere meanwhile
