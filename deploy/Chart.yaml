@@ -1,0 +1,10 @@
+# Deployed by Argo CD (jmnser/gitops, tenant/). Dependabot bumps the version after each release.
+apiVersion: v2
+name: notely-deploy
+description: The deployed notely release.
+type: application
+version: 0.1.0
+dependencies:
+  - name: notely-chart
+    version: 0.24.0
+    repository: oci://registry-1.docker.io/jonas27

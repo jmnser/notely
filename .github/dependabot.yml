@@ -9,3 +9,9 @@ updates:
   - package-ecosystem: docker
     directory: /
     schedule: {interval: weekly}
+  # Deploys each release: bumps notely-chart in deploy/. chore(deps) is not releasable, so the
+  # merge does not start another release. No cooldown: the chart comes from this repo's CI.
+  - package-ecosystem: helm
+    directory: /deploy
+    schedule: {interval: daily}
+    commit-message: {prefix: chore(deps)}
