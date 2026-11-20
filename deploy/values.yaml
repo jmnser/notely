@@ -1,0 +1,7 @@
+notely-chart:
+  route:
+    hostname: jmnser.duckdns.org
+  # Owner of /data/notely on the node.
+  securityContext:
+    runAsUser: 1000
+    runAsGroup: 1000
