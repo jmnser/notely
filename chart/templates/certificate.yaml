@@ -1,0 +1,21 @@
+# Backend certificate from the internal CA. The server reloads it on renewal.
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ include "notely.fullname" . }}
+  labels:
+    {{- include "notely.labels" . | nindent 4 }}
+spec:
+  secretName: {{ include "notely.fullname" . }}-tls
+  duration: 168h # 7 days
+  renewBefore: 56h # at 2/3 of the lifetime
+  dnsNames:
+    - {{ include "notely.serviceHost" . }}
+    - {{ include "notely.serviceHost" . }}.cluster.local
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+    rotationPolicy: Always
+  issuerRef:
+    kind: ClusterIssuer
+    name: {{ .Values.tls.issuer }}

@@ -1,0 +1,38 @@
+image:
+  repository: docker.io/jonas27/notely
+  # Defaults to the chart's appVersion.
+  tag: ""
+  # Set by release CI to the digest of the released image.
+  digest: ""
+  pullPolicy: IfNotPresent
+
+# Public URL: https://<route.hostname><basePath>/
+basePath: /notely
+
+route:
+  # Required: public hostname on the Gateway listener.
+  hostname: ""
+  gateway:
+    name: public
+    namespace: gateway
+
+tls:
+  # ClusterIssuer of the internal CA, which the Gateway trusts for backends.
+  issuer: internal-ca
+  # ConfigMap with the internal CA certificate (key ca.crt), provided in the namespace.
+  caConfigMap: internal-ca
+
+persistence:
+  # Claim on the volume that the platform provides for the namespace.
+  claimName: data
+  size: 10Gi
+
+# Interval of the Git backup of each user's notes; 0 backs up on request only.
+syncInterval: 1h
+
+resources:
+  requests:
+    cpu: 10m
+    memory: 64Mi
+  limits:
+    memory: 512Mi

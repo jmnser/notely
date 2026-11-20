@@ -1,0 +1,40 @@
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: {{ include "notely.fullname" . }}
+  labels:
+    {{- include "notely.labels" . | nindent 4 }}
+spec:
+  parentRefs:
+    - name: {{ .Values.route.gateway.name }}
+      namespace: {{ .Values.route.gateway.namespace }}
+  hostnames:
+    - {{ required "route.hostname is required" .Values.route.hostname | quote }}
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: {{ .Values.basePath }}
+      backendRefs:
+        - name: {{ include "notely.fullname" . }}
+          port: 8080
+---
+# The Gateway re-encrypts to the backend and trusts only the internal CA.
+apiVersion: gateway.networking.k8s.io/v1
+kind: BackendTLSPolicy
+metadata:
+  name: {{ include "notely.fullname" . }}
+  labels:
+    {{- include "notely.labels" . | nindent 4 }}
+spec:
+  targetRefs:
+    - group: ""
+      kind: Service
+      name: {{ include "notely.fullname" . }}
+      sectionName: https
+  validation:
+    hostname: {{ include "notely.serviceHost" . }}
+    caCertificateRefs:
+      - group: ""
+        kind: ConfigMap
+        name: {{ .Values.tls.caConfigMap }}

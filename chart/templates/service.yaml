@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "notely.fullname" . }}
+  labels:
+    {{- include "notely.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "notely.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: https
+      port: 8080
+      targetPort: https
+      appProtocol: https

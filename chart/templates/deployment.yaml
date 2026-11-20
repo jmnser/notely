@@ -1,0 +1,78 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "notely.fullname" . }}
+  labels:
+    {{- include "notely.labels" . | nindent 4 }}
+spec:
+  # One writer on a ReadWriteOnce volume: the old pod stops before the new one starts.
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "notely.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "notely.labels" . | nindent 8 }}
+    spec:
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      # Time for the last Git backup on shutdown, which may take a minute.
+      terminationGracePeriodSeconds: 70
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: notely
+          image: {{ include "notely.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args:
+            - -addr=:8080
+            - -data=/data
+            - -base={{ .Values.basePath }}
+            - -sync-interval={{ .Values.syncInterval }}
+            - -tls-cert=/tls/tls.crt
+            - -tls-key=/tls/tls.key
+          ports:
+            - name: https
+              containerPort: 8080
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: https
+              scheme: HTTPS
+          # Port only: a slow disk must not restart the pod.
+          livenessProbe:
+            tcpSocket:
+              port: https
+            periodSeconds: 20
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            - name: data
+              mountPath: /data
+            - name: tls
+              mountPath: /tls
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: {{ .Values.persistence.claimName }}
+        - name: tls
+          secret:
+            secretName: {{ include "notely.fullname" . }}-tls
+        - name: tmp
+          emptyDir:
+            sizeLimit: 64Mi
