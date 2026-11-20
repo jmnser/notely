@@ -6,8 +6,9 @@ image:
   digest: ""
   pullPolicy: IfNotPresent
 
-# Public URL: https://<route.hostname><basePath>/
-basePath: /notely
+# Path prefix of the app: https://<route.hostname><basePath>/. Empty serves it at the root of
+# its own hostname.
+basePath: ""
 
 route:
   # Required: public hostname on the Gateway listener.
