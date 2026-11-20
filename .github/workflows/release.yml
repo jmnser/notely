@@ -162,6 +162,7 @@ jobs:
           helm push "dist/notely-chart-$VERSION.tgz" "oci://$REGISTRY/$USERNAME" 2>&1 | tee push.log
           digest=$(sed -n 's/^Digest: //p' push.log)
           [ -n "$digest" ] || { echo "::error::no chart digest in the helm push output"; exit 1; }
-          cosign sign --yes "$REGISTRY/$USERNAME/notely-chart@$digest"
+          # docker.io, not $REGISTRY: docker/login-action stores the credentials under docker.io.
+          cosign sign --yes "docker.io/$USERNAME/notely-chart@$digest"
         env:
           TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
