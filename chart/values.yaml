@@ -36,3 +36,8 @@ resources:
     memory: 64Mi
   limits:
     memory: 512Mi
+
+# Owner of the data on the node's volume.
+securityContext:
+  runAsUser: 65532
+  runAsGroup: 65532
