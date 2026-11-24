@@ -1,6 +1,6 @@
 dependencies:
 - name: notely-chart
   repository: oci://registry-1.docker.io/jonas27
-  version: 0.26.0
-digest: sha256:171a931b9cd3b5df6b8968086624c508381ce117768606e8e7fa29e7cfe5bec8
-generated: "2026-11-20T18:26:53.190542532+01:00"
+  version: 0.27.0
+digest: sha256:6c711808438272884b80abd83d8e3507ee43329c942826c7f3175d1123e6ffce
+generated: "2026-11-24T00:45:07.615800155Z"
